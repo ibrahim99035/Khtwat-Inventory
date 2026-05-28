@@ -736,6 +736,11 @@ input.ltr, textarea.ltr, select.ltr { text-align: left; }
   border-color: #f1c2bb;
 }
 
+.size-chip.low {
+  background: #fff2dc;
+  border-color: #f0d1a8;
+}
+
 :root[data-theme="dark"] .modal-overlay,
 body[data-theme="dark"] .modal-overlay {
   background: rgba(0, 0, 0, 0.55);
@@ -769,6 +774,12 @@ body[data-theme="dark"] .variant-table td {
 body[data-theme="dark"] .size-chip.zero {
   background: rgba(227, 91, 79, 0.18);
   border-color: rgba(227, 91, 79, 0.35);
+}
+
+:root[data-theme="dark"] .size-chip.low,
+body[data-theme="dark"] .size-chip.low {
+  background: rgba(241, 163, 64, 0.15);
+  border-color: rgba(241, 163, 64, 0.35);
 }
 
 @keyframes rise {

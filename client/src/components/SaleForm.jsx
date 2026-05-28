@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useInventoryByModel, useModelVariants, useModels } from '../hooks/useProducts'
 import { useCreateSale } from '../hooks/useSales'
 import { fmt } from '../utils/helpers'
+import { getInventoryBySku } from '../api/products'
 
 const EMPTY_LINE = () => ({
   _tempId: Math.random().toString(36).slice(2),
@@ -10,6 +11,7 @@ const EMPTY_LINE = () => ({
   sku: '',
   size: '',
   qty: 1,
+  unitPrice: 0,
 })
 
 export default function SaleForm({ onClose }) {
@@ -35,24 +37,16 @@ export default function SaleForm({ onClose }) {
   const addLine = () => setLines(prev => [...prev, EMPTY_LINE()])
   const removeLine = (tempId) => setLines(prev => prev.filter(line => line._tempId !== tempId))
 
-  const calcLine = (line) => {
-    const model = modelLookup.get(String(line.modelId))
-    return {
-      unitPrice: Number(model?.sellPrice || 0),
-    }
-  }
-
   const totals = useMemo(() => {
     let subtotal = 0
     for (const line of lines) {
-      const { unitPrice } = calcLine(line)
-      subtotal += unitPrice * Number(line.qty || 0)
+      subtotal += Number(line.unitPrice || 0) * Number(line.qty || 0)
     }
     const total = Math.max(subtotal, 0)
     const paid = Math.min(Number(paidAmount || 0), total)
     const balance = Math.max(total - paid, 0)
     return { subtotal, total, paid, balance }
-  }, [lines, paidAmount, modelLookup])
+  }, [lines, paidAmount])
 
   const requiresCustomer = totals.balance > 0
 
@@ -67,11 +61,10 @@ export default function SaleForm({ onClose }) {
 
     const payload = {
       items: lines.map(line => {
-        const model = modelLookup.get(String(line.modelId))
         return {
           sku: line.sku,
           qty: Number(line.qty),
-          unitPrice: Number(model?.sellPrice || 0),
+          unitPrice: Number(line.unitPrice || 0),
         }
       }),
       paidAmount: Number(paidAmount || 0),
@@ -171,9 +164,16 @@ export default function SaleForm({ onClose }) {
 function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivider }) {
   const { data: variantsData } = useModelVariants(line.modelId)
   const { data: inventoryData } = useInventoryByModel(line.modelId)
+  const [skuInput, setSkuInput] = useState('')
+  const [isLookup, setIsLookup] = useState(false)
 
   const variants = variantsData?.variants || []
   const inventory = inventoryData?.inventory || []
+
+  const variantLookup = useMemo(
+    () => new Map(variants.map(v => [String(v._id), v])),
+    [variants]
+  )
 
   const getSizeOptions = (variantId) => {
     if (!variantId) return []
@@ -193,19 +193,22 @@ function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivide
   )
 
   const activeSize = sizeOptions.find(s => s.sku === line.sku)
-  const unitPrice = Number(modelLookup.get(String(line.modelId))?.sellPrice || 0)
+  const activeVariant = variantLookup.get(String(line.variantId))
+  const unitPrice = Number(activeVariant?.sellPrice || 0)
 
   const handleModelChange = (modelId) => {
-    onChange(line._tempId, { modelId, variantId: '', sku: '', size: '' })
+    onChange(line._tempId, { modelId, variantId: '', sku: '', size: '', unitPrice: 0 })
   }
 
   const handleVariantChange = (variantId) => {
     const nextOptions = getSizeOptions(variantId)
     const first = nextOptions[0]
+    const variant = variantLookup.get(String(variantId))
     onChange(line._tempId, {
       variantId,
       sku: first?.sku || '',
       size: first ? String(first.size) : '',
+      unitPrice: Number(variant?.sellPrice || 0),
     })
   }
 
@@ -217,8 +220,49 @@ function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivide
     })
   }
 
+  const handleSkuLookup = async () => {
+    const code = skuInput.trim().toUpperCase()
+    if (!code) return
+    try {
+      setIsLookup(true)
+      const { data } = await getInventoryBySku(code)
+      const variant = data?.variantId
+      const model = variant?.productModelId
+      if (!variant || !model) {
+        throw new Error('Invalid SKU data')
+      }
+      onChange(line._tempId, {
+        modelId: String(model._id),
+        variantId: String(variant._id),
+        sku: data.sku,
+        size: String(data.euSize),
+        unitPrice: Number(variant.sellPrice || model.sellPrice || 0),
+      })
+    } catch (err) {
+      alert('لم يتم العثور على SKU')
+    } finally {
+      setIsLookup(false)
+    }
+  }
+
   return (
     <div className="sale-line">
+      <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr', gap: 10, marginBottom: 10 }}>
+        <div className="form-group">
+          <label>بحث سريع بـ SKU</label>
+          <input
+            value={skuInput}
+            onChange={e => setSkuInput(e.target.value)}
+            placeholder="مثال: KHT-NB550-WHG-42"
+            className="ltr"
+          />
+        </div>
+        <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+          <button className="btn sm" onClick={handleSkuLookup} disabled={isLookup}>
+            {isLookup ? 'جارٍ البحث...' : 'بحث'}
+          </button>
+        </div>
+      </div>
       <div className="form-grid" style={{ gridTemplateColumns: '2fr 1fr 1fr 1fr', gap: 10 }}>
         <div className="form-group">
           <label>الموديل</label>
@@ -245,7 +289,7 @@ function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivide
             <option value="">اختر لونا</option>
             {variants.map(variant => (
               <option key={variant._id} value={variant._id}>
-                {variant.colorName} ({variant.colorCode})
+                {variant.colorName} ({variant.colorCode}) - {fmt(variant.sellPrice || 0)}
               </option>
             ))}
           </select>
@@ -283,7 +327,7 @@ function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivide
       <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, marginTop: 8 }}>
         <div className="form-group">
           <label>السعر</label>
-          <input value={fmt(unitPrice)} readOnly className="ltr" />
+          <input value={fmt(line.unitPrice || unitPrice)} readOnly className="ltr" />
         </div>
         <div className="form-group">
           <label>الكود (SKU)</label>
@@ -291,7 +335,7 @@ function SaleLine({ line, modelLookup, onChange, onRemove, canRemove, showDivide
         </div>
         <div className="form-group">
           <label>الإجمالي</label>
-          <input value={fmt(unitPrice * Number(line.qty || 0))} readOnly className="ltr" />
+          <input value={fmt((line.unitPrice || unitPrice) * Number(line.qty || 0))} readOnly className="ltr" />
         </div>
         <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
           {canRemove && (

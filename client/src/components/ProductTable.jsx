@@ -1,24 +1,16 @@
-import { useState } from 'react'
-import { useProducts, useDeleteProduct, useUpdateSizeStock } from '../hooks/useProducts'
+import { Fragment, useMemo, useState } from 'react'
 import {
-  variantTotalStock,
-  variantStockStatus,
-  productTotalStock,
-  productStockStatus,
-  priceRange,
-  productAgeGroup,
-  margin,
-  fmt,
-} from '../utils/helpers'
+  useAdjustInventoryStock,
+  useModelVariants,
+  useModels,
+  useUpdateInventoryMeta,
+  useUpdateInventoryStock,
+} from '../hooks/useProducts'
+import { fmt } from '../utils/helpers'
+import * as api from '../api/products'
+import { useQueries } from '@tanstack/react-query'
 
 const STATUS_LABEL = { in: 'متوفر', low: 'منخفض', out: 'نافد' }
-const AGE_LABEL = {
-  toddler: 'أطفال صغار',
-  kid: 'أطفال',
-  adult: 'بالغين',
-  mixed: 'مختلط',
-  unknown: 'غير محدد',
-}
 
 const SortTh = ({ col, label, current, dir, onSort }) => (
   <th
@@ -31,10 +23,38 @@ const SortTh = ({ col, label, current, dir, onSort }) => (
   </th>
 )
 
-function VariantRows({ product, onStockEdit }) {
+const toNumber = (val) => Number(val || 0)
+
+const computeInventoryStats = (inventory = []) => {
+  const total = inventory.reduce((sum, item) => sum + toNumber(item.quantity), 0)
+  const available = inventory.reduce((sum, item) => sum + toNumber(item.availableQuantity), 0)
+  const low = inventory.some(item => item.availableQuantity > 0 && item.availableQuantity <= item.lowStockAt)
+  const status = available === 0 ? 'out' : low ? 'low' : 'in'
+  return { total, available, status }
+}
+
+const marginPct = (cost, sell) => {
+  if (!sell || sell <= 0) return 0
+  return Math.round(((sell - cost) / sell) * 100)
+}
+
+function VariantRows({ model, inventory, onStockEdit }) {
+  const { data: variantsData } = useModelVariants(model._id)
+  const variants = variantsData?.variants || []
+
+  const sizesByVariant = useMemo(() => {
+    const map = new Map()
+    for (const item of inventory) {
+      const key = String(item.variantId)
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push(item)
+    }
+    return map
+  }, [inventory])
+
   return (
     <tr className="expand-row">
-      <td colSpan={13} style={{ padding: '0 0 0 48px' }}>
+      <td colSpan={9} style={{ padding: '0 0 0 48px' }}>
         <div style={{ padding: '12px 12px 12px 0' }}>
           <table className="variant-table">
             <thead>
@@ -50,31 +70,29 @@ function VariantRows({ product, onStockEdit }) {
               </tr>
             </thead>
             <tbody>
-              {product.variants.map(v => {
-                const total = variantTotalStock(v)
-                const status = variantStockStatus(v)
+              {variants.map(v => {
+                const sizes = sizesByVariant.get(String(v._id)) || []
+                const total = sizes.reduce((sum, s) => sum + toNumber(s.quantity), 0)
+                const status = computeInventoryStats(sizes).status
                 return (
                   <tr key={v._id}>
-                    <td style={{ fontWeight: 500 }}>
-                      <span className="color-chip" style={{ background: v.colorHex || '#000' }} />
-                      {v.color}
-                    </td>
-                    <td className="mono ltr">{v.sku}</td>
+                    <td style={{ fontWeight: 500 }}>{v.colorName}</td>
+                    <td className="mono ltr">{v.colorCode}</td>
                     <td>{fmt(v.costPrice)}</td>
                     <td>{fmt(v.sellPrice)}</td>
-                    <td style={{ color: 'var(--green)' }}>{margin(v)}%</td>
+                    <td style={{ color: 'var(--green)' }}>{marginPct(v.costPrice, v.sellPrice)}%</td>
                     <td>
                       <div className="size-grid">
-                        {v.sizes.map(sz => (
+                        {sizes.map(sz => (
                           <div
-                            key={sz.size}
-                            className={`size-chip ${sz.stock === 0 ? 'zero' : ''}`}
-                            title="اضغط لتعديل المخزون"
+                            key={sz.sku}
+                            className={`size-chip ${sz.availableQuantity === 0 ? 'zero' : sz.availableQuantity <= sz.lowStockAt ? 'low' : ''}`}
+                            title={`SKU: ${sz.sku}`}
                             style={{ cursor: 'pointer' }}
-                            onClick={() => onStockEdit({ product, variant: v, sizeEntry: sz })}
+                            onClick={() => onStockEdit({ model, variant: v, sizeEntry: sz })}
                           >
-                            <span style={{ fontWeight: 500 }}>{sz.size}</span>
-                            <span className="muted">x{sz.stock}</span>
+                            <span style={{ fontWeight: 500 }}>{sz.euSize}</span>
+                            <span className="muted">متاح {sz.availableQuantity}</span>
                           </div>
                         ))}
                       </div>
@@ -93,15 +111,54 @@ function VariantRows({ product, onStockEdit }) {
 }
 
 function StockEditModal({ entry, onClose }) {
-  const { product, variant, sizeEntry } = entry
-  const [val, setVal] = useState(String(sizeEntry.stock))
-  const { mutate, isPending } = useUpdateSizeStock()
+  const { sizeEntry, variant, model } = entry
+  const [mode, setMode] = useState('set')
+  const [val, setVal] = useState(String(sizeEntry.quantity))
+  const [delta, setDelta] = useState('0')
+  const [reason, setReason] = useState('restock')
+  const [note, setNote] = useState('')
+  const [lowStockAt, setLowStockAt] = useState(String(sizeEntry.lowStockAt ?? 5))
+  const [warehouseLocation, setWarehouseLocation] = useState(sizeEntry.warehouseLocation || '')
+  const [barcode, setBarcode] = useState(sizeEntry.barcode || '')
+  const [flags, setFlags] = useState({
+    lowStock: sizeEntry.flags?.lowStock || false,
+    featured: sizeEntry.flags?.featured || false,
+    trending: sizeEntry.flags?.trending || false,
+    deadStock: sizeEntry.flags?.deadStock || false,
+    fastSelling: sizeEntry.flags?.fastSelling || false,
+    highMargin: sizeEntry.flags?.highMargin || false,
+    requiresRestock: sizeEntry.flags?.requiresRestock || false,
+    hidden: sizeEntry.flags?.hidden || false,
+    archived: sizeEntry.flags?.archived || false,
+  })
 
-  const save = () => {
-    mutate(
-      { productId: product._id, variantId: variant._id, size: sizeEntry.size, stock: Number(val) },
-      { onSuccess: onClose }
-    )
+  const { mutateAsync: setStock, isPending: isSetting } = useUpdateInventoryStock()
+  const { mutateAsync: adjustStock, isPending: isAdjusting } = useAdjustInventoryStock()
+  const { mutateAsync: updateMeta, isPending: isUpdatingMeta } = useUpdateInventoryMeta()
+
+  const isPending = isSetting || isAdjusting || isUpdatingMeta
+
+  const save = async () => {
+    if (mode === 'set') {
+      await setStock({ sku: sizeEntry.sku, payload: { quantity: Number(val) } })
+    } else {
+      await adjustStock({
+        sku: sizeEntry.sku,
+        payload: { delta: Number(delta), reason, note },
+      })
+    }
+
+    await updateMeta({
+      sku: sizeEntry.sku,
+      payload: {
+        lowStockAt: Number(lowStockAt),
+        warehouseLocation,
+        barcode,
+        flags,
+      },
+    })
+
+    onClose()
   }
 
   return (
@@ -112,18 +169,110 @@ function StockEditModal({ entry, onClose }) {
           <button className="btn ghost icon" onClick={onClose}>X</button>
         </div>
         <p className="muted" style={{ fontSize: 13, marginBottom: 16 }}>
-          {product.name} - {variant.color} - مقاس {sizeEntry.size}
+          {model.modelName} - {variant.colorName} - مقاس {sizeEntry.euSize}
         </p>
-        <div className="form-group">
-          <label>كمية المخزون</label>
-          <input
-            type="number"
-            min="0"
-            autoFocus
-            value={val}
-            onChange={e => setVal(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && save()}
-          />
+        <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div className="form-group">
+            <label>المتاح</label>
+            <input value={sizeEntry.availableQuantity ?? 0} readOnly className="ltr" />
+          </div>
+          <div className="form-group">
+            <label>محجوز</label>
+            <input value={sizeEntry.reservedQuantity ?? 0} readOnly className="ltr" />
+          </div>
+          <div className="form-group">
+            <label>تالف</label>
+            <input value={sizeEntry.damagedQuantity ?? 0} readOnly className="ltr" />
+          </div>
+          <div className="form-group">
+            <label>الإجمالي</label>
+            <input value={sizeEntry.quantity ?? 0} readOnly className="ltr" />
+          </div>
+        </div>
+
+        <div className="form-group" style={{ marginTop: 8 }}>
+          <label>طريقة التعديل</label>
+          <select value={mode} onChange={e => setMode(e.target.value)}>
+            <option value="set">تعيين كمية جديدة</option>
+            <option value="adjust">تعديل بالزيادة/النقصان</option>
+          </select>
+        </div>
+
+        {mode === 'set' ? (
+          <div className="form-group">
+            <label>كمية المخزون</label>
+            <input
+              type="number"
+              min="0"
+              autoFocus
+              value={val}
+              onChange={e => setVal(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && save()}
+            />
+          </div>
+        ) : (
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            <div className="form-group">
+              <label>التغيير (+/-)</label>
+              <input
+                type="number"
+                value={delta}
+                onChange={e => setDelta(e.target.value)}
+              />
+            </div>
+            <div className="form-group">
+              <label>السبب</label>
+              <select value={reason} onChange={e => setReason(e.target.value)}>
+                <option value="restock">توريد</option>
+                <option value="return">مرتجع</option>
+                <option value="damage">تالف</option>
+                <option value="transfer">تحويل مخزن</option>
+                <option value="audit">جرد</option>
+                <option value="sale_correction">تصحيح بيع</option>
+                <option value="other">أخرى</option>
+              </select>
+            </div>
+            <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+              <label>ملاحظة</label>
+              <input value={note} onChange={e => setNote(e.target.value)} />
+            </div>
+          </div>
+        )}
+
+        <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 8 }}>
+          <div className="form-group">
+            <label>حد التنبيه</label>
+            <input
+              type="number"
+              min="0"
+              value={lowStockAt}
+              onChange={e => setLowStockAt(e.target.value)}
+            />
+          </div>
+          <div className="form-group">
+            <label>المخزن</label>
+            <input value={warehouseLocation} onChange={e => setWarehouseLocation(e.target.value)} />
+          </div>
+          <div className="form-group" style={{ gridColumn: '1 / -1' }}>
+            <label>الباركود</label>
+            <input value={barcode} onChange={e => setBarcode(e.target.value)} className="ltr" />
+          </div>
+        </div>
+
+        <div style={{ marginTop: 8 }}>
+          <p className="section-title">إشارات الأعمال</p>
+          <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+            {Object.keys(flags).map(key => (
+              <label key={key} style={{ display: 'flex', gap: 8, alignItems: 'center', fontSize: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={flags[key]}
+                  onChange={e => setFlags(prev => ({ ...prev, [key]: e.target.checked }))}
+                />
+                {key}
+              </label>
+            ))}
+          </div>
         </div>
         <div className="modal-footer">
           <button className="btn" onClick={onClose}>إلغاء</button>
@@ -136,158 +285,86 @@ function StockEditModal({ entry, onClose }) {
   )
 }
 
-function ProductDetailsModal({ product, onClose, onEdit, onDelete }) {
-  const total = productTotalStock(product)
-  const status = productStockStatus(product)
-  const ageGroup = productAgeGroup(product)
-  const isAvailable = product.available !== false
-  const thumb = product.images?.[0]?.url
+function ProductDetailsModal({ model, inventory, onClose, onEdit }) {
+  const stats = computeInventoryStats(inventory)
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal product-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>تفاصيل المنتج</h2>
+          <h2>تفاصيل الموديل</h2>
           <button className="btn ghost icon" onClick={onClose}>X</button>
         </div>
 
         <div className="product-hero">
           <div className="product-image">
-            {thumb
-              ? <img src={thumb} alt={product.name} />
-              : <span>ص</span>
-            }
+            <span>ص</span>
           </div>
           <div className="product-meta">
-            <h3>{product.name}</h3>
+            <h3>{model.modelName}</h3>
             <div className="pill-row">
-              <span className={`badge ${isAvailable ? 'available' : 'unavailable'}`}>
-                {isAvailable ? 'متاح' : 'غير متاح'}
-              </span>
-              <span className={`badge ${status}`}>{STATUS_LABEL[status]}</span>
-              <span className="badge">{AGE_LABEL[ageGroup]}</span>
+              <span className={`badge ${stats.status}`}>{STATUS_LABEL[stats.status]}</span>
+            </div>
+            <div className="inline-kv">
+              <span>كود الموديل</span>
+              <strong className="ltr">{model.modelId || '-'}</strong>
             </div>
             <div className="inline-kv">
               <span>الماركة</span>
-              <strong>{product.brand || '-'}</strong>
+              <strong>{model.brand || '-'}</strong>
             </div>
             <div className="inline-kv">
               <span>التصنيف</span>
-              <strong>{product.category || '-'}</strong>
-            </div>
-            <div className="inline-kv">
-              <span>النوع</span>
-              <strong>
-                {product.gender === 'male'
-                  ? 'رجالي'
-                  : product.gender === 'female'
-                    ? 'نسائي'
-                    : 'للجنسين'}
-              </strong>
+              <strong>{model.category || '-'}</strong>
             </div>
             <div className="inline-kv">
               <span>إجمالي المخزون</span>
-              <strong>{Number(total).toLocaleString('ar-EG')}</strong>
-            </div>
-            <div className="inline-kv">
-              <span>نطاق السعر</span>
-              <strong>{product.variants.length ? priceRange(product) : '-'}</strong>
+              <strong>{Number(stats.total).toLocaleString('ar-EG')}</strong>
             </div>
           </div>
         </div>
 
-        {(product.description || product.notes) && (
+        {model.description && (
           <div className="details-grid">
-            {product.description && (
-              <div>
-                <p className="section-title">الوصف</p>
-                <p className="muted" style={{ marginTop: -4 }}>{product.description}</p>
-              </div>
-            )}
-            {product.notes && (
-              <div>
-                <p className="section-title">ملاحظات داخلية</p>
-                <p className="muted" style={{ marginTop: -4 }}>{product.notes}</p>
-              </div>
-            )}
+            <div>
+              <p className="section-title">الوصف</p>
+              <p className="muted" style={{ marginTop: -4 }}>{model.description}</p>
+            </div>
           </div>
         )}
 
         <div className="details-divider" />
 
         <div>
-          <p className="section-title">النسخ والألوان</p>
-          {product.variants.length > 0 ? (
-            <table className="variant-table">
-              <thead>
-                <tr>
-                  <th>اللون</th>
-                  <th>الكود</th>
-                  <th>البيع</th>
-                  <th>الهامش</th>
-                  <th>المخزون</th>
-                  <th>المقاسات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {product.variants.map(v => {
-                  const totalStock = variantTotalStock(v)
-                  return (
-                    <tr key={v._id}>
-                      <td style={{ fontWeight: 500 }}>
-                        <span className="color-chip" style={{ background: v.colorHex || '#000' }} />
-                        {v.color}
-                      </td>
-                      <td className="mono ltr">{v.sku}</td>
-                      <td>{fmt(v.sellPrice)}</td>
-                      <td style={{ color: 'var(--green)' }}>{margin(v)}%</td>
-                      <td style={{ fontWeight: 500 }}>{Number(totalStock).toLocaleString('ar-EG')}</td>
-                      <td>
-                        <div className="size-grid">
-                          {v.sizes.map(sz => (
-                            <div key={sz.size} className={`size-chip ${sz.stock === 0 ? 'zero' : ''}`}>
-                              <span style={{ fontWeight: 500 }}>{sz.size}</span>
-                              <span className="muted">x{sz.stock}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <p className="muted">لا توجد نسخ مضافة.</p>
-          )}
+          <p className="section-title">ألوان الموديل</p>
+          <p className="muted">افتح الصف لرؤية الألوان والمقاسات.</p>
         </div>
 
         <div className="modal-footer">
           <button className="btn" onClick={onClose}>إغلاق</button>
           <button className="btn ghost" onClick={onEdit}>تعديل</button>
-          <button className="btn danger" onClick={onDelete}>حذف</button>
         </div>
       </div>
     </div>
   )
 }
 
-export default function ProductTable({ params, setParam, selected, setSelected, onEdit }) {
-  const { data, isLoading } = useProducts(params)
-  const { mutate: del } = useDeleteProduct()
+export default function ProductTable({ params, setParam, onEdit }) {
+  const { data, isLoading } = useModels()
   const [expanded, setExpanded] = useState(null)
   const [stockEdit, setStockEdit] = useState(null)
   const [preview, setPreview] = useState(null)
 
-  const products = data?.products || []
-  const totalPages = data?.totalPages || 1
+  const models = data?.models || []
+  const perPage = 20
 
-  const toggleExpand = (id) => setExpanded(e => e === id ? null : id)
-  const toggleSelect = (id) => setSelected(s =>
-    s.includes(id) ? s.filter(x => x !== id) : [...s, id]
-  )
-  const toggleAll = (e) =>
-    setSelected(e.target.checked ? products.map(p => p._id) : [])
+  const inventoryMap = useMemo(() => {
+    const map = new Map()
+    models.forEach(m => {
+      map.set(String(m._id), m.inventory || [])
+    })
+    return map
+  }, [models])
 
   const handleSort = (col) => {
     if (params.sort === col) {
@@ -298,21 +375,57 @@ export default function ProductTable({ params, setParam, selected, setSelected, 
     }
   }
 
-  const handleDelete = (p) => {
-    if (!confirm(`حذف "${p.name}"؟ لا يمكن التراجع.`)) return false
-    del(p._id)
-    return true
-  }
+  const filtered = useMemo(() => {
+    const search = params.search?.trim().toLowerCase()
+    const matchesText = (m) => {
+      if (!search) return true
+      return [m.modelId, m.modelName, m.brand, m.category]
+        .filter(Boolean)
+        .some(v => String(v).toLowerCase().includes(search))
+    }
+
+    return models.filter(m => {
+      if (!matchesText(m)) return false
+      if (params.brand && m.brand !== params.brand) return false
+      if (params.category && m.category !== params.category) return false
+      if (params.gender && m.gender !== params.gender) return false
+
+      if (params.status) {
+        const inv = inventoryMap.get(String(m._id))
+        if (!inv || inv.length === 0) return false
+        const status = computeInventoryStats(inv).status
+        if (status !== params.status) return false
+      }
+
+      return true
+    })
+  }, [models, params, inventoryMap])
+
+  const sorted = useMemo(() => {
+    const dir = params.order === 'asc' ? 1 : -1
+    const list = [...filtered]
+    list.sort((a, b) => {
+      const av = a[params.sort] ?? ''
+      const bv = b[params.sort] ?? ''
+      if (typeof av === 'string') return av.localeCompare(bv) * dir
+      return (av - bv) * dir
+    })
+    return list
+  }, [filtered, params.order, params.sort])
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / perPage))
+  const page = Math.min(params.page || 1, totalPages)
+  const paged = sorted.slice((page - 1) * perPage, page * perPage)
 
   if (isLoading) return (
-    <div className="card empty-state">جارٍ تحميل المنتجات...</div>
+    <div className="card empty-state">جارٍ تحميل الموديلات...</div>
   )
 
-  if (!products.length) return (
+  if (!models.length) return (
     <div className="card empty-state">
       <p style={{ fontSize: 32, marginBottom: 8 }}>ص</p>
-      <p style={{ fontWeight: 500, marginBottom: 4 }}>لا توجد منتجات</p>
-      <p className="muted">جرّب تعديل الفلاتر أو أضف أول منتج.</p>
+      <p style={{ fontWeight: 500, marginBottom: 4 }}>لا توجد موديلات</p>
+      <p className="muted">جرّب تعديل الفلاتر أو أضف أول موديل.</p>
     </div>
   )
 
@@ -323,54 +436,29 @@ export default function ProductTable({ params, setParam, selected, setSelected, 
           <table>
             <thead>
               <tr>
-                <th style={{ width: 36, padding: '9px 12px' }}>
-                  <input
-                    type="checkbox"
-                    checked={products.length > 0 && products.every(p => selected.includes(p._id))}
-                    onChange={toggleAll}
-                  />
-                </th>
                 <th style={{ width: 60 }}></th>
-                <SortTh col="name" label="المنتج" current={params.sort} dir={params.order} onSort={handleSort} />
+                <SortTh col="modelName" label="الموديل" current={params.sort} dir={params.order} onSort={handleSort} />
+                <SortTh col="modelId" label="الكود" current={params.sort} dir={params.order} onSort={handleSort} />
                 <SortTh col="brand" label="الماركة" current={params.sort} dir={params.order} onSort={handleSort} />
                 <SortTh col="category" label="التصنيف" current={params.sort} dir={params.order} onSort={handleSort} />
                 <th>النوع</th>
-                <th>الفئة العمرية</th>
-                <th>التوفر</th>
-                <th>النسخ</th>
-                <th>نطاق السعر</th>
                 <th>إجمالي المخزون</th>
                 <th>الحالة</th>
                 <th>إجراءات</th>
               </tr>
             </thead>
             <tbody>
-              {products.map(p => {
-                const isExp = expanded === p._id
-                const isSel = selected.includes(p._id)
-                const total = productTotalStock(p)
-                const status = productStockStatus(p)
-                const ageGroup = productAgeGroup(p)
-                const isAvailable = p.available !== false
-                const thumb = p.images?.[0]?.url
+              {paged.map(m => {
+                const isExp = expanded === m._id
+                const inv = inventoryMap.get(String(m._id)) || []
+                const stats = computeInventoryStats(inv)
 
                 return (
-                  <>
+                  <Fragment key={m._id}>
                     <tr
-                      key={p._id}
                       className="row-clickable"
-                      style={{ background: isSel ? 'var(--bg)' : undefined }}
-                      onClick={() => setPreview(p)}
+                      onClick={() => setPreview(m)}
                     >
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={isSel}
-                          onChange={() => toggleSelect(p._id)}
-                          onClick={e => e.stopPropagation()}
-                        />
-                      </td>
-
                       <td>
                         <div
                           style={{
@@ -386,124 +474,93 @@ export default function ProductTable({ params, setParam, selected, setSelected, 
                             fontSize: 20,
                           }}
                         >
-                          {thumb
-                            ? <img src={thumb} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                            : 'ص'
-                          }
+                          ص
                         </div>
                       </td>
-
                       <td>
-                        <span style={{ fontWeight: 500 }}>{p.name}</span>
-                        {p.description && (
+                        <span style={{ fontWeight: 500 }}>{m.modelName}</span>
+                        {m.description && (
                           <p className="muted" style={{ fontSize: 12, marginTop: 2 }}>
-                            {p.description.slice(0, 60)}{p.description.length > 60 ? '...' : ''}
+                            {m.description.slice(0, 60)}{m.description.length > 60 ? '...' : ''}
                           </p>
                         )}
                       </td>
-                      <td>{p.brand || <span className="muted">-</span>}</td>
-                      <td>{p.category || <span className="muted">-</span>}</td>
+                      <td className="mono ltr">{m.modelId || <span className="muted">-</span>}</td>
+                      <td>{m.brand || <span className="muted">-</span>}</td>
+                      <td>{m.category || <span className="muted">-</span>}</td>
                       <td>
-                        {p.gender === 'male'
+                        {m.gender === 'male'
                           ? 'رجالي'
-                          : p.gender === 'female'
+                          : m.gender === 'female'
                             ? 'نسائي'
-                            : p.gender
+                            : m.gender
                               ? 'للجنسين'
                               : <span className="muted">-</span>}
                       </td>
-                      <td>{AGE_LABEL[ageGroup]}</td>
+                      <td style={{ fontWeight: 500 }}>{Number(stats.total).toLocaleString('ar-EG')}</td>
+                      <td><span className={`badge ${stats.status}`}>{STATUS_LABEL[stats.status]}</span></td>
                       <td>
-                        <span className={`badge ${isAvailable ? 'available' : 'unavailable'}`}>
-                          {isAvailable ? 'متاح' : 'غير متاح'}
-                        </span>
-                      </td>
-                      <td>
-                        <button
-                          className="btn ghost sm"
-                          onClick={(e) => { e.stopPropagation(); toggleExpand(p._id) }}
-                          style={{ fontWeight: 500 }}
-                        >
-                          {Number(p.variants.length).toLocaleString('ar-EG')} نسخة
-                          {' '}{isExp ? '^' : 'v'}
-                        </button>
-                      </td>
-                      <td style={{ whiteSpace: 'nowrap' }}>
-                        {p.variants.length ? priceRange(p) : <span className="muted">-</span>}
-                      </td>
-                      <td style={{ fontWeight: 500, color: total === 0 ? 'var(--red)' : undefined }}>
-                        {Number(total).toLocaleString('ar-EG')}
-                      </td>
-                      <td>
-                        <span className={`badge ${status}`}>{STATUS_LABEL[status]}</span>
-                      </td>
-                      <td>
-                        <div style={{ display: 'flex', gap: 4 }}>
-                          <button className="btn ghost sm" onClick={(e) => { e.stopPropagation(); onEdit(p) }}>تعديل</button>
-                          <button className="btn ghost sm danger" onClick={(e) => { e.stopPropagation(); handleDelete(p) }}>حذف</button>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                          <button
+                            className="btn ghost sm"
+                            onClick={e => { e.stopPropagation(); setExpanded(isExp ? null : m._id) }}
+                          >
+                            {isExp ? 'إخفاء' : 'تفاصيل'}
+                          </button>
+                          <button
+                            className="btn ghost sm"
+                            onClick={e => { e.stopPropagation(); onEdit(m) }}
+                          >
+                            تعديل
+                          </button>
                         </div>
                       </td>
                     </tr>
 
                     {isExp && (
-                      <VariantRows
-                        key={`${p._id}-exp`}
-                        product={p}
-                        onStockEdit={setStockEdit}
-                      />
+                      <VariantRows model={m} inventory={inv} onStockEdit={setStockEdit} />
                     )}
-                  </>
+                  </Fragment>
                 )
               })}
             </tbody>
           </table>
         </div>
+      </div>
 
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            padding: '10px 16px',
-            borderTop: '1px solid var(--border)',
-            fontSize: 13,
-            color: 'var(--muted)',
-          }}
+      <div className="pagination" style={{ marginTop: 12 }}>
+        <button
+          className="btn ghost"
+          onClick={() => setParam('page', Math.max(1, page - 1))}
+          disabled={page <= 1}
         >
-          <span>الإجمالي: {Number(data.total).toLocaleString('ar-EG')} منتج</span>
-          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-            <button
-              className="btn sm"
-              disabled={params.page <= 1}
-              onClick={() => setParam('page', params.page - 1)}
-            >
-              السابق
-            </button>
-            <span>صفحة {Number(params.page).toLocaleString('ar-EG')} من {Number(totalPages).toLocaleString('ar-EG')}</span>
-            <button
-              className="btn sm"
-              disabled={params.page >= totalPages}
-              onClick={() => setParam('page', params.page + 1)}
-            >
-              التالي
-            </button>
-          </div>
-        </div>
+          السابق
+        </button>
+        <span className="muted">
+          صفحة {page} من {totalPages}
+        </span>
+        <button
+          className="btn ghost"
+          onClick={() => setParam('page', Math.min(totalPages, page + 1))}
+          disabled={page >= totalPages}
+        >
+          التالي
+        </button>
       </div>
 
       {stockEdit && (
-        <StockEditModal
-          entry={stockEdit}
-          onClose={() => setStockEdit(null)}
-        />
+        <StockEditModal entry={stockEdit} onClose={() => setStockEdit(null)} />
       )}
 
       {preview && (
         <ProductDetailsModal
-          product={preview}
+          model={preview}
+          inventory={inventoryMap.get(String(preview._id)) || []}
           onClose={() => setPreview(null)}
-          onEdit={() => { setPreview(null); onEdit(preview) }}
-          onDelete={() => { if (handleDelete(preview)) setPreview(null) }}
+          onEdit={() => {
+            setPreview(null)
+            onEdit(preview)
+          }}
         />
       )}
     </>

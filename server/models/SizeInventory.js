@@ -28,6 +28,7 @@ const SizeInventorySchema = new mongoose.Schema(
     status: { type: String, enum: ['active', 'inactive', 'archived'], default: 'active' },
     lowStockAt: { type: Number, min: 0, default: 5 },
     flags: { type: FlagsSchema, default: () => ({}) },
+    externalId: { type: String, sparse: true }, // For Odoo/WooCommerce sync
   },
   { timestamps: true }
 )

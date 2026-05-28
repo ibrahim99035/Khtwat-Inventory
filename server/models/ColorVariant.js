@@ -11,6 +11,8 @@ const ColorVariantSchema = new mongoose.Schema(
     productModelId: { type: mongoose.Schema.Types.ObjectId, ref: 'ProductModel', required: true },
     colorName: { type: String, required: true, trim: true },
     colorCode: { type: String, required: true, trim: true, uppercase: true },
+    costPrice: { type: Number, min: 0, default: 0 },
+    sellPrice: { type: Number, min: 0, default: 0 },
     imageSet: { type: [AssetSchema], default: [] },
     thumbnail: { type: AssetSchema, default: null },
     videoAssets: { type: [AssetSchema], default: [] },

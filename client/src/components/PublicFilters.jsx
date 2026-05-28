@@ -11,7 +11,7 @@ export default function PublicFilters({ params, setParam }) {
       <div className="search-bar">
         <input
           className="search-input"
-          placeholder="ابحث عن اسم المنتج أو الماركة..."
+          placeholder="ابحث عن الموديل أو الماركة..."
           value={params.search}
           onChange={e => setParam('search', e.target.value)}
         />

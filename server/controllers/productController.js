@@ -1,142 +1,78 @@
-import Product from '../models/Product.js'
-import { uploadToCloudinary, deleteFromCloudinary } from '../middleware/upload.js'
+import ProductModel from '../models/ProductModel.js'
+import ColorVariant from '../models/ColorVariant.js'
+import SizeInventory from '../models/SizeInventory.js'
 
-const variantStats = (variant) => {
-  const totalStock = variant.sizes.reduce((s, sz) => s + sz.stock, 0)
-  const profit = variant.sellPrice - variant.costPrice
-  const margin = variant.sellPrice > 0
-    ? Math.round((profit / variant.sellPrice) * 100)
-    : 0
+const computeVariantStatus = (sizes = []) => {
+  const available = sizes.reduce((sum, s) => sum + Number(s.availableQuantity || 0), 0)
+  const low = sizes.some(s => s.availableQuantity > 0 && s.availableQuantity <= s.lowStockAt)
+  if (available === 0) return 'out'
+  if (low) return 'low'
+  return 'in'
+}
 
-  let stockStatus = 'in'
-  if (totalStock === 0) stockStatus = 'out'
-  else if (variant.sizes.some(sz => sz.stock <= variant.lowStockAt && sz.stock > 0)) {
-    stockStatus = 'low'
+const buildPublicModel = (model, variants, inventory) => {
+  const sizesByVariant = new Map()
+  for (const item of inventory) {
+    const key = String(item.variantId)
+    if (!sizesByVariant.has(key)) sizesByVariant.set(key, [])
+    sizesByVariant.get(key).push(item)
   }
 
-  return { totalStock, profit, margin, stockStatus }
-}
+  const mappedVariants = variants.map(v => {
+    const sizes = (sizesByVariant.get(String(v._id)) || [])
+      .map(s => ({
+        sku: s.sku,
+        size: s.euSize,
+        stock: s.quantity,
+        available: s.availableQuantity,
+        lowStockAt: s.lowStockAt,
+      }))
+      .sort((a, b) => a.size - b.size)
 
-const csvEscape = (val) => {
-  const str = val === null || val === undefined ? '' : String(val)
-  if (/[",\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`
-  return str
-}
+    const image = v.thumbnail?.url || v.imageSet?.[0]?.url || null
 
-const sanitizePublicProduct = (product) => {
-  const variants = (product.variants || []).map(v => ({
-    _id: v._id,
-    sku: v.sku,
-    color: v.color,
-    colorHex: v.colorHex,
-    sellPrice: v.sellPrice,
-    sizes: (v.sizes || []).map(sz => ({
-      size: sz.size,
-      stock: sz.stock,
-    })),
-  }))
+    return {
+      _id: v._id,
+      colorName: v.colorName,
+      colorCode: v.colorCode,
+      sellPrice: v.sellPrice,
+      status: computeVariantStatus(sizes),
+      image,
+      sizes,
+    }
+  })
+
+  const prices = mappedVariants.map(v => Number(v.sellPrice || 0)).filter(p => p > 0)
+  const minPrice = prices.length ? Math.min(...prices) : 0
+  const maxPrice = prices.length ? Math.max(...prices) : 0
+  const priceRange = { min: minPrice, max: maxPrice }
+
+  const heroImage = mappedVariants.find(v => v.image)?.image || null
 
   return {
-    _id: product._id,
-    name: product.name,
-    brand: product.brand,
-    category: product.category,
-    description: product.description,
-    gender: product.gender,
-    available: product.available,
-    images: product.images || [],
-    variants,
-  }
-}
-
-export const getProducts = async (req, res) => {
-  try {
-    const {
-      search,
-      category,
-      brand,
-      gender,
-      available,
-      status,
-      sort = 'createdAt',
-      order = 'desc',
-      page = 1,
-      limit = 20,
-    } = req.query
-
-    const query = {}
-
-    if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: 'i' } },
-        { brand: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } },
-        { 'variants.sku': { $regex: search, $options: 'i' } },
-      ]
-    }
-    if (category) query.category = category
-    if (brand) query.brand = brand
-    if (gender) query.gender = gender
-    if (available !== undefined && available !== '') query.available = available === 'true'
-
-    const sortObj = { [sort]: order === 'asc' ? 1 : -1 }
-    const skip = (Number(page) - 1) * Number(limit)
-
-    let products = await Product.find(query)
-      .sort(sortObj)
-      .skip(skip)
-      .limit(Number(limit))
-      .lean()
-
-    if (status) {
-      products = products.filter(p => {
-        const statuses = p.variants.map(v => variantStats(v).stockStatus)
-        if (status === 'out') return statuses.every(s => s === 'out')
-        if (status === 'low') return statuses.some(s => s === 'low')
-        if (status === 'in') return statuses.some(s => s === 'in')
-        return true
-      })
-    }
-
-    const total = await Product.countDocuments(query)
-
-    res.json({
-      products,
-      total,
-      page: Number(page),
-      totalPages: Math.ceil(total / Number(limit)),
-    })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const getMeta = async (_, res) => {
-  try {
-    const [categories, brands] = await Promise.all([
-      Product.distinct('category'),
-      Product.distinct('brand'),
-    ])
-    res.json({
-      categories: categories.filter(Boolean),
-      brands: brands.filter(Boolean),
-      genders: (await Product.distinct('gender')).filter(Boolean),
-    })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
+    _id: model._id,
+    modelId: model.modelId,
+    modelName: model.modelName,
+    brand: model.brand,
+    category: model.category,
+    gender: model.gender,
+    description: model.description,
+    priceRange,
+    image: heroImage,
+    variants: mappedVariants,
   }
 }
 
 export const getPublicMeta = async (_, res) => {
   try {
     const [categories, brands] = await Promise.all([
-      Product.distinct('category', { available: true }),
-      Product.distinct('brand', { available: true }),
+      ProductModel.distinct('category'),
+      ProductModel.distinct('brand'),
     ])
     res.json({
       categories: categories.filter(Boolean),
       brands: brands.filter(Boolean),
-      genders: (await Product.distinct('gender', { available: true })).filter(Boolean),
+      genders: (await ProductModel.distinct('gender')).filter(Boolean),
     })
   } catch (err) {
     res.status(500).json({ message: err.message })
@@ -156,290 +92,86 @@ export const getPublicProducts = async (req, res) => {
       limit = 24,
     } = req.query
 
-    const query = { available: true }
+    const query = {}
 
     if (search) {
       query.$or = [
-        { name: { $regex: search, $options: 'i' } },
+        { modelName: { $regex: search, $options: 'i' } },
+        { modelId: { $regex: search, $options: 'i' } },
         { brand: { $regex: search, $options: 'i' } },
         { category: { $regex: search, $options: 'i' } },
-        { 'variants.sku': { $regex: search, $options: 'i' } },
       ]
     }
     if (category) query.category = category
     if (brand) query.brand = brand
     if (gender) query.gender = gender
 
+    const baseModels = await ProductModel.find(query).select('_id').lean()
+    const baseModelIds = baseModels.map(m => m._id)
+
+    const allVariants = await ColorVariant.find({ productModelId: { $in: baseModelIds } })
+      .select('_id productModelId')
+      .lean()
+    const allVariantIds = allVariants.map(v => v._id)
+
+    const allInventory = await SizeInventory.find({ variantId: { $in: allVariantIds } })
+      .select('variantId')
+      .lean()
+
+    const variantIdsWithInventory = new Set(allInventory.map(i => String(i.variantId)))
+    const modelIdsWithInventory = new Set(
+      allVariants
+        .filter(v => variantIdsWithInventory.has(String(v._id)))
+        .map(v => String(v.productModelId))
+    )
+
+    const filteredModelIds = Array.from(modelIdsWithInventory)
     const sortObj = { [sort]: order === 'asc' ? 1 : -1 }
     const skip = (Number(page) - 1) * Number(limit)
 
-    const products = await Product.find(query)
+    const models = await ProductModel.find({ ...query, _id: { $in: filteredModelIds } })
       .sort(sortObj)
       .skip(skip)
       .limit(Number(limit))
       .lean()
 
-    const sanitized = products.map(sanitizePublicProduct)
+    const modelIds = models.map(m => m._id)
+    const variants = await ColorVariant.find({ productModelId: { $in: modelIds } }).lean()
+    const variantIds = variants.map(v => v._id)
+    const inventory = await SizeInventory.find({ variantId: { $in: variantIds } }).lean()
 
-    const total = await Product.countDocuments(query)
+    const variantsByModel = new Map()
+    for (const variant of variants) {
+      const key = String(variant.productModelId)
+      if (!variantsByModel.has(key)) variantsByModel.set(key, [])
+      variantsByModel.get(key).push(variant)
+    }
+
+    const inventoryByVariant = new Map()
+    for (const item of inventory) {
+      const key = String(item.variantId)
+      if (!inventoryByVariant.has(key)) inventoryByVariant.set(key, [])
+      inventoryByVariant.get(key).push(item)
+    }
+
+    const catalog = models.map(model => {
+      const modelVariants = variantsByModel.get(String(model._id)) || []
+      const modelInventory = modelVariants.flatMap(v => inventoryByVariant.get(String(v._id)) || [])
+      return buildPublicModel(model, modelVariants, modelInventory)
+    })
+
+    const filteredCatalog = catalog.filter(entry =>
+      entry.variants.some(v => (v.sizes || []).length > 0)
+    )
+
+    const total = filteredModelIds.length
 
     res.json({
-      products: sanitized,
+      products: filteredCatalog,
       total,
       page: Number(page),
       totalPages: Math.ceil(total / Number(limit)),
     })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const getStats = async (_, res) => {
-  try {
-    const products = await Product.find().lean()
-
-    let totalSkus = 0
-    let stockValue = 0
-    let potRevenue = 0
-    let alertCount = 0
-
-    for (const p of products) {
-      for (const v of p.variants) {
-        totalSkus++
-        const { totalStock, stockStatus } = variantStats(v)
-        stockValue += v.costPrice * totalStock
-        potRevenue += v.sellPrice * totalStock
-        if (stockStatus !== 'in') alertCount++
-      }
-    }
-
-    res.json({
-      totalProducts: products.length,
-      totalSkus,
-      stockValue,
-      potRevenue,
-      potProfit: potRevenue - stockValue,
-      alertCount,
-    })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const getProduct = async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id).lean()
-    if (!product) return res.status(404).json({ message: 'Product not found' })
-    res.json(product)
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const createProduct = async (req, res) => {
-  try {
-    const { name, brand, category, description, notes, gender, available, variants } = req.body
-
-    const images = []
-    if (req.files?.length) {
-      for (const file of req.files) {
-        const result = await uploadToCloudinary(file.buffer)
-        images.push(result)
-      }
-    }
-
-    const parsedVariants = typeof variants === 'string' ? JSON.parse(variants) : variants
-
-    const product = await Product.create({
-      name,
-      brand,
-      category,
-      description,
-      notes,
-      gender,
-      available: available !== undefined ? available === 'true' || available === true : true,
-      images,
-      variants: parsedVariants || [],
-    })
-
-    res.status(201).json(product)
-  } catch (err) {
-    if (err.code === 11000) {
-      return res.status(400).json({ message: 'A variant SKU already exists' })
-    }
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const updateProduct = async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id)
-    if (!product) return res.status(404).json({ message: 'Product not found' })
-
-    const { name, brand, category, description, notes, gender, available, variants, removeImages } = req.body
-
-    if (name) product.name = name
-    if (brand) product.brand = brand
-    if (category) product.category = category
-    if (description) product.description = description
-    if (notes) product.notes = notes
-    if (gender) product.gender = gender
-    if (available !== undefined) {
-      product.available = available === 'true' || available === true
-    }
-
-    if (removeImages) {
-      const ids = typeof removeImages === 'string' ? JSON.parse(removeImages) : removeImages
-      for (const publicId of ids) {
-        await deleteFromCloudinary(publicId)
-      }
-      product.images = product.images.filter(img => !ids.includes(img.publicId))
-    }
-
-    if (req.files?.length) {
-      for (const file of req.files) {
-        const result = await uploadToCloudinary(file.buffer)
-        product.images.push(result)
-      }
-    }
-
-    if (variants) {
-      const parsed = typeof variants === 'string' ? JSON.parse(variants) : variants
-      product.variants = parsed
-    }
-
-    await product.save()
-    res.json(product)
-  } catch (err) {
-    if (err.code === 11000) {
-      return res.status(400).json({ message: 'A variant SKU already exists' })
-    }
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const updateSizeStock = async (req, res) => {
-  try {
-    const { id, variantId, size } = req.params
-    const { stock } = req.body
-
-    const product = await Product.findById(id)
-    if (!product) return res.status(404).json({ message: 'Product not found' })
-
-    const variant = product.variants.id(variantId)
-    if (!variant) return res.status(404).json({ message: 'Variant not found' })
-
-    const sizeEntry = variant.sizes.find(s => s.size === size)
-    if (!sizeEntry) return res.status(404).json({ message: 'Size not found' })
-
-    sizeEntry.stock = Number(stock)
-    await product.save()
-
-    res.json(product)
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const deleteProduct = async (req, res) => {
-  try {
-    const product = await Product.findById(req.params.id)
-    if (!product) return res.status(404).json({ message: 'Product not found' })
-
-    for (const img of product.images) {
-      await deleteFromCloudinary(img.publicId)
-    }
-
-    await product.deleteOne()
-    res.json({ message: 'Product deleted' })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const bulkDelete = async (req, res) => {
-  try {
-    const { ids } = req.body
-    const products = await Product.find({ _id: { $in: ids } })
-
-    for (const p of products) {
-      for (const img of p.images) {
-        await deleteFromCloudinary(img.publicId)
-      }
-      await p.deleteOne()
-    }
-
-    res.json({ message: `${products.length} products deleted` })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const importProducts = async (req, res) => {
-  try {
-    const { products, overwrite = false } = req.body
-
-    let created = 0
-    let updated = 0
-    let skipped = 0
-
-    for (const p of products) {
-      const existing = await Product.findOne({
-        'variants.sku': { $in: (p.variants || []).map(v => v.sku) }
-      })
-
-      if (existing) {
-        if (overwrite) {
-          await existing.updateOne(p)
-          updated++
-        } else {
-          skipped++
-        }
-      } else {
-        await Product.create(p)
-        created++
-      }
-    }
-
-    res.json({ created, updated, skipped })
-  } catch (err) {
-    res.status(500).json({ message: err.message })
-  }
-}
-
-export const exportProducts = async (_, res) => {
-  try {
-    const products = await Product.find().lean()
-
-    const header = [
-      'name',
-      'brand',
-      'category',
-      'description',
-      'notes',
-      'gender',
-      'available',
-      'images',
-      'variants',
-    ]
-
-    const rows = products.map(p => [
-      csvEscape(p.name),
-      csvEscape(p.brand),
-      csvEscape(p.category),
-      csvEscape(p.description),
-      csvEscape(p.notes),
-      csvEscape(p.gender),
-      csvEscape(p.available),
-      csvEscape(JSON.stringify(p.images || [])),
-      csvEscape(JSON.stringify(p.variants || [])),
-    ])
-
-    const csv = [header.join(','), ...rows.map(r => r.join(','))].join('\n')
-
-    res.setHeader('Content-Type', 'text/csv')
-    res.setHeader('Content-Disposition', 'attachment; filename="products.csv"')
-    res.send(csv)
   } catch (err) {
     res.status(500).json({ message: err.message })
   }

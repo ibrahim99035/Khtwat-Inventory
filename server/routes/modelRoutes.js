@@ -6,6 +6,8 @@ import {
   getProductModel,
   createColorVariant,
   listVariantsByModel,
+  updateProductModel,
+  updateColorVariant,
 } from '../controllers/productModelController.js'
 
 const router = Router()
@@ -18,5 +20,8 @@ router.get('/:modelId/variants', listVariantsByModel)
 
 router.post('/', createProductModel)
 router.post('/:modelId/variants', createColorVariant)
+
+router.patch('/:id', updateProductModel)
+router.patch('/:modelId/variants/:variantId', updateColorVariant)
 
 export default router

@@ -5,15 +5,17 @@ const sizeLabel = (sizes) => sizes.map(s => s.size).join('، ')
 
 const buildWhatsAppMessage = (product, variant, size) => {
   const lines = [
-    `مرحبا، أريد شراء هذا المنتج: ${product.name}`,
+    `مرحبا، أريد شراء هذا المنتج: ${product.modelName}`,
+    product.modelId ? `كود الموديل: ${product.modelId}` : null,
     product.brand ? `الماركة: ${product.brand}` : null,
     product.category ? `التصنيف: ${product.category}` : null,
     product.description ? `الوصف: ${product.description}` : null,
-    variant?.sku ? `الكود: ${variant.sku}` : null,
-    variant?.color ? `اللون: ${variant.color}` : null,
+    variant?.colorCode ? `كود اللون: ${variant.colorCode}` : null,
+    variant?.colorName ? `اللون: ${variant.colorName}` : null,
     size?.size ? `المقاس: ${size.size}` : null,
+    size?.sku ? `SKU: ${size.sku}` : null,
     variant?.sellPrice ? `السعر: ${fmt(variant.sellPrice)}` : null,
-    variant?.sizes?.length ? `المقاسات المتاحة: ${sizeLabel(variant.sizes)}` : null,
+    variant?.sizes?.length ? `المقاسات: ${sizeLabel(variant.sizes)}` : null,
   ].filter(Boolean)
 
   return lines.join('\n')
@@ -46,18 +48,22 @@ export default function PublicProductModal({ product, onClose, onWhatsApp, whats
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal public-modal" onClick={e => e.stopPropagation()}>
         <div className="modal-header">
-          <h2>{product.name}</h2>
+          <h2>{product.modelName}</h2>
           <button className="btn ghost icon" onClick={onClose}>X</button>
         </div>
 
         <div className="product-hero">
           <div className="product-image">
-            {product.images?.[0]?.url
-              ? <img src={product.images[0].url} alt={product.name} />
+            {product.image
+              ? <img src={product.image} alt={product.modelName} />
               : <span>ص</span>
             }
           </div>
           <div className="product-meta">
+            <div className="inline-kv">
+              <span>كود الموديل</span>
+              <strong className="ltr">{product.modelId || '-'}</strong>
+            </div>
             <div className="inline-kv">
               <span>الماركة</span>
               <strong>{product.brand || '-'}</strong>
@@ -88,7 +94,7 @@ export default function PublicProductModal({ product, onClose, onWhatsApp, whats
             >
               {variants.map(v => (
                 <option key={v._id} value={v._id}>
-                  {v.color} ({v.sku})
+                  {v.colorName} ({v.colorCode})
                 </option>
               ))}
             </select>
@@ -97,8 +103,8 @@ export default function PublicProductModal({ product, onClose, onWhatsApp, whats
             <label>المقاس</label>
             <select value={sizeValue} onChange={e => setSizeValue(e.target.value)}>
               {activeSizes.map(s => (
-                <option key={s.size} value={s.size}>
-                  {s.size} (متاح {s.stock})
+                <option key={s.size} value={s.size} disabled={s.available <= 0}>
+                  {s.size} (متاح {s.available})
                 </option>
               ))}
             </select>
@@ -106,6 +112,21 @@ export default function PublicProductModal({ product, onClose, onWhatsApp, whats
           <div className="form-group">
             <label>السعر</label>
             <input value={fmt(activeVariant?.sellPrice || 0)} readOnly className="ltr" />
+          </div>
+        </div>
+
+        <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: 10, marginTop: 10 }}>
+          <div className="form-group">
+            <label>SKU</label>
+            <input value={activeSize?.sku || '-'} readOnly className="ltr" />
+          </div>
+          <div className="form-group">
+            <label>حالة المخزون</label>
+            <input value={activeVariant?.status === 'low' ? 'منخفض' : activeVariant?.status === 'out' ? 'نافد' : 'متوفر'} readOnly />
+          </div>
+          <div className="form-group">
+            <label>المقاسات</label>
+            <input value={sizeLabel(activeSizes)} readOnly />
           </div>
         </div>
 

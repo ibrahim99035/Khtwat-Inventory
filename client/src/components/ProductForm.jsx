@@ -1,45 +1,85 @@
-import { useState } from 'react'
-import { useCreateProduct, useUpdateProduct } from '../hooks/useProducts'
-import { generateSku, expandSizeRange } from '../utils/helpers'
-import ImageUploader from './ImageUploader'
+import { useEffect, useMemo, useState } from 'react'
+import toast from 'react-hot-toast'
+import {
+  useCreateInventory,
+  useCreateModel,
+  useCreateVariant,
+  useInventoryByModel,
+  useModelVariants,
+  useUpdateInventoryStock,
+  useUpdateModel,
+  useUpdateVariant,
+} from '../hooks/useProducts'
+import { expandSizeRange } from '../utils/helpers'
 
 const EMPTY_VARIANT = () => ({
   _tempId: Math.random().toString(36).slice(2),
-  sku: '',
-  color: '',
-  colorHex: '#000000',
+  colorName: '',
+  colorCode: '',
   costPrice: '',
   sellPrice: '',
-  lowStockAt: 5,
   sizes: [],
 })
 
 export default function ProductForm({ product, onClose }) {
   const isEdit = !!product._id
 
-  const { mutate: create, isPending: creating } = useCreateProduct()
-  const { mutate: update, isPending: updating } = useUpdateProduct()
-  const isPending = creating || updating
+  const { data: variantsData } = useModelVariants(product._id)
+  const { data: inventoryData } = useInventoryByModel(product._id)
 
-  const [name, setName] = useState(product.name || '')
+  const { mutateAsync: createModel } = useCreateModel()
+  const { mutateAsync: updateModel } = useUpdateModel()
+  const { mutateAsync: createVariant } = useCreateVariant()
+  const { mutateAsync: updateVariant } = useUpdateVariant()
+  const { mutateAsync: createInventory } = useCreateInventory()
+  const { mutateAsync: updateInventoryStock } = useUpdateInventoryStock()
+
+  const [saving, setSaving] = useState(false)
+
+  const [modelId, setModelId] = useState(product.modelId || '')
   const [brand, setBrand] = useState(product.brand || '')
+  const [modelName, setModelName] = useState(product.modelName || '')
   const [category, setCategory] = useState(product.category || '')
-  const [description, setDescription] = useState(product.description || '')
-  const [notes, setNotes] = useState(product.notes || '')
   const [gender, setGender] = useState(product.gender || 'unisex')
-  const [available, setAvailable] = useState(
-    product.available !== undefined ? product.available : true
-  )
+  const [description, setDescription] = useState(product.description || '')
+  const [material, setMaterial] = useState(product.material || '')
+  const [supplier, setSupplier] = useState(product.supplier || '')
+  const [releaseSeason, setReleaseSeason] = useState(product.releaseSeason || '')
+  const [tags, setTags] = useState((product.tags || []).join(', '))
+  const [initialized, setInitialized] = useState(false)
 
-  const [existingImages, setExistingImages] = useState(product.images || [])
-  const [removedPublicIds, setRemovedPublicIds] = useState([])
-  const [newImageFiles, setNewImageFiles] = useState([])
+  const inventory = inventoryData?.inventory || []
+  const sizesByVariant = useMemo(() => {
+    const map = new Map()
+    for (const item of inventory) {
+      const key = String(item.variantId)
+      if (!map.has(key)) map.set(key, [])
+      map.get(key).push({
+        sku: item.sku,
+        euSize: item.euSize,
+        quantity: item.quantity,
+      })
+    }
+    return map
+  }, [inventory])
 
-  const [variants, setVariants] = useState(
-    product.variants?.length
-      ? product.variants.map(v => ({ ...v, _tempId: v._id }))
-      : [EMPTY_VARIANT()]
-  )
+  const [variants, setVariants] = useState([EMPTY_VARIANT()])
+
+  useEffect(() => {
+    if (!isEdit || initialized) return
+    const variantList = variantsData?.variants || []
+    const mapped = variantList.map(v => ({
+      _tempId: v._id,
+      _id: v._id,
+      colorName: v.colorName || '',
+      colorCode: v.colorCode || '',
+      costPrice: v.costPrice ?? '',
+      sellPrice: v.sellPrice ?? '',
+      sizes: sizesByVariant.get(String(v._id)) || [],
+    }))
+    setVariants(mapped.length ? mapped : [EMPTY_VARIANT()])
+    setInitialized(true)
+  }, [isEdit, initialized, variantsData, sizesByVariant])
 
   const updateVariant = (tempId, changes) => {
     setVariants(vs => vs.map(v => {
@@ -55,16 +95,18 @@ export default function ProductForm({ product, onClose }) {
     setVariants(vs => vs.filter(v => v._tempId !== tempId))
 
   const setSizeRange = (tempId, rangeStr) => {
-    const sizes = expandSizeRange(rangeStr).map(s => ({ size: s, stock: 0 }))
+    const sizes = expandSizeRange(rangeStr).map(s => ({ euSize: s, quantity: 0 }))
     updateVariant(tempId, { sizes, _sizeRange: rangeStr })
   }
 
-  const updateSizeStock = (tempId, size, stock) => {
+  const updateSizeQty = (tempId, size, quantity) => {
     setVariants(vs => vs.map(v => {
       if (v._tempId !== tempId) return v
       return {
         ...v,
-        sizes: v.sizes.map(s => s.size === size ? { ...s, stock: Number(stock) } : s),
+        sizes: v.sizes.map(s => String(s.euSize) === String(size)
+          ? { ...s, quantity: Number(quantity) }
+          : s),
       }
     }))
   }
@@ -73,47 +115,88 @@ export default function ProductForm({ product, onClose }) {
     if (!size.trim()) return
     setVariants(vs => vs.map(v => {
       if (v._tempId !== tempId) return v
-      if (v.sizes.find(s => s.size === size)) return v
-      return { ...v, sizes: [...v.sizes, { size: size.trim(), stock: 0 }] }
+      if (v.sizes.find(s => String(s.euSize) === String(size))) return v
+      return { ...v, sizes: [...v.sizes, { euSize: size.trim(), quantity: 0 }] }
     }))
   }
 
   const removeSize = (tempId, size) => {
     setVariants(vs => vs.map(v => {
       if (v._tempId !== tempId) return v
-      return { ...v, sizes: v.sizes.filter(s => s.size !== size) }
+      return { ...v, sizes: v.sizes.filter(s => String(s.euSize) !== String(size)) }
     }))
   }
 
-  const submit = () => {
-    if (!name.trim()) return alert('اسم المنتج مطلوب')
-    if (variants.some(v => !v.sku.trim() || !v.color.trim())) {
-      return alert('كل نسخة تحتاج كود ولون')
+  const submit = async () => {
+    if (!modelId.trim() || !modelName.trim()) return alert('كود الموديل والاسم مطلوبان')
+    if (variants.some(v => !v.colorName.trim() || !v.colorCode.trim())) {
+      return alert('كل لون يحتاج اسم وكود')
     }
 
-    const cleanVariants = variants.map(({ _tempId, _sizeRange, ...rest }) => rest)
+    setSaving(true)
+    try {
+      let modelDoc = product
+      const modelPayload = {
+        modelId: modelId.trim().toUpperCase(),
+        brand,
+        modelName,
+        category,
+        gender,
+        description,
+        material,
+        supplier,
+        releaseSeason,
+        tags: tags.split(',').map(t => t.trim()).filter(Boolean),
+      }
 
-    const fd = new FormData()
-    fd.append('name', name)
-    fd.append('brand', brand)
-    fd.append('category', category)
-    fd.append('description', description)
-    fd.append('notes', notes)
-    fd.append('gender', gender)
-    fd.append('available', String(available))
-    fd.append('variants', JSON.stringify(cleanVariants))
+      if (isEdit) {
+        await updateModel({ id: product._id, payload: modelPayload })
+      } else {
+        const created = await createModel(modelPayload)
+        modelDoc = created.data
+      }
 
-    if (removedPublicIds.length) {
-      fd.append('removeImages', JSON.stringify(removedPublicIds))
-    }
-    for (const file of newImageFiles) {
-      fd.append('images', file)
-    }
+      const variantIdMap = new Map()
+      for (const variant of variants) {
+        const payload = {
+          colorName: variant.colorName,
+          colorCode: variant.colorCode,
+          costPrice: Number(variant.costPrice || 0),
+          sellPrice: Number(variant.sellPrice || 0),
+        }
 
-    if (isEdit) {
-      update({ id: product._id, formData: fd }, { onSuccess: onClose })
-    } else {
-      create(fd, { onSuccess: onClose })
+        if (variant._id) {
+          await updateVariant({ modelId: modelDoc._id, variantId: variant._id, payload })
+          variantIdMap.set(variant._tempId, variant._id)
+        } else {
+          const created = await createVariant({ modelId: modelDoc._id, payload })
+          variantIdMap.set(variant._tempId, created.data._id)
+        }
+      }
+
+      for (const variant of variants) {
+        const variantId = variantIdMap.get(variant._tempId)
+        for (const sizeEntry of variant.sizes) {
+          if (!sizeEntry.euSize && sizeEntry.euSize !== 0) continue
+          const qty = Number(sizeEntry.quantity || 0)
+          if (sizeEntry.sku) {
+            await updateInventoryStock({ sku: sizeEntry.sku, payload: { quantity: qty } })
+          } else {
+            await createInventory({
+              variantId,
+              euSize: Number(sizeEntry.euSize),
+              quantity: qty,
+            })
+          }
+        }
+      }
+
+      toast.success(isEdit ? 'تم تحديث الموديل' : 'تم إنشاء الموديل')
+      onClose()
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'فشل حفظ الموديل')
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -130,15 +213,25 @@ export default function ProductForm({ product, onClose }) {
         </div>
 
         <section>
-          <p className="section-title">معلومات المنتج</p>
+          <p className="section-title">بيانات الموديل</p>
           <div className="form-grid">
             <div className="form-group full">
-              <label>الاسم *</label>
-              <input value={name} onChange={e => setName(e.target.value)} placeholder="مثال: Air Max 90" />
+              <label>اسم الموديل *</label>
+              <input value={modelName} onChange={e => setModelName(e.target.value)} placeholder="مثال: NB 550" />
+            </div>
+            <div className="form-group">
+              <label>كود الموديل *</label>
+              <input
+                value={modelId}
+                onChange={e => setModelId(e.target.value)}
+                placeholder="مثال: NB550"
+                className="ltr"
+                disabled={isEdit}
+              />
             </div>
             <div className="form-group">
               <label>الماركة</label>
-              <input value={brand} onChange={e => setBrand(e.target.value)} placeholder="مثال: Nike" />
+              <input value={brand} onChange={e => setBrand(e.target.value)} placeholder="مثال: New Balance" />
             </div>
             <div className="form-group">
               <label>التصنيف</label>
@@ -152,20 +245,6 @@ export default function ProductForm({ product, onClose }) {
                 <option value="female">نسائي</option>
               </select>
             </div>
-            <div className="form-group">
-              <label>التوفر</label>
-              <label className="switch">
-                <input
-                  type="checkbox"
-                  checked={available}
-                  onChange={e => setAvailable(e.target.checked)}
-                />
-                <span className="slider" />
-                <span className="switch-label">
-                  {available ? 'متاح' : 'غير متاح'}
-                </span>
-              </label>
-            </div>
             <div className="form-group full">
               <label>الوصف</label>
               <textarea
@@ -176,27 +255,27 @@ export default function ProductForm({ product, onClose }) {
               />
             </div>
             <div className="form-group full">
-              <label>ملاحظات (داخلية)</label>
-              <input value={notes} onChange={e => setNotes(e.target.value)} placeholder="ملاحظات داخلية..." />
+              <label>الخامة</label>
+              <input value={material} onChange={e => setMaterial(e.target.value)} placeholder="مثال: Leather" />
+            </div>
+            <div className="form-group">
+              <label>المورد</label>
+              <input value={supplier} onChange={e => setSupplier(e.target.value)} placeholder="اسم المورد" />
+            </div>
+            <div className="form-group">
+              <label>الموسم</label>
+              <input value={releaseSeason} onChange={e => setReleaseSeason(e.target.value)} placeholder="مثال: SS24" />
+            </div>
+            <div className="form-group full">
+              <label>الوسوم</label>
+              <input value={tags} onChange={e => setTags(e.target.value)} placeholder="tag1, tag2" />
             </div>
           </div>
         </section>
 
         <section style={{ marginTop: '1.5rem' }}>
-          <p className="section-title">الصور</p>
-          <ImageUploader
-            existing={existingImages}
-            onFilesChange={setNewImageFiles}
-            onRemoveExisting={(pid) => {
-              setExistingImages(imgs => imgs.filter(i => i.publicId !== pid))
-              setRemovedPublicIds(ids => [...ids, pid])
-            }}
-          />
-        </section>
-
-        <section style={{ marginTop: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
-            <p className="section-title" style={{ flex: 1 }}>نسخ الألوان</p>
+            <p className="section-title" style={{ flex: 1 }}>ألوان الموديل</p>
             <button className="btn sm" onClick={addVariant}>إضافة نسخة</button>
           </div>
 
@@ -205,12 +284,11 @@ export default function ProductForm({ product, onClose }) {
               key={v._tempId}
               variant={v}
               index={idx}
-              productName={name}
               canRemove={variants.length > 1}
               onChange={(changes) => updateVariant(v._tempId, changes)}
               onRemove={() => removeVariant(v._tempId)}
               onSetSizeRange={(r) => setSizeRange(v._tempId, r)}
-              onUpdateSizeStock={(size, stock) => updateSizeStock(v._tempId, size, stock)}
+              onUpdateSizeStock={(size, stock) => updateSizeQty(v._tempId, size, stock)}
               onAddSize={(size) => addSingleSize(v._tempId, size)}
               onRemoveSize={(size) => removeSize(v._tempId, size)}
             />
@@ -219,8 +297,8 @@ export default function ProductForm({ product, onClose }) {
 
         <div className="modal-footer">
           <button className="btn" onClick={onClose}>إلغاء</button>
-          <button className="btn primary" onClick={submit} disabled={isPending}>
-            {isPending ? 'جارٍ الحفظ...' : isEdit ? 'حفظ التغييرات' : 'إنشاء المنتج'}
+          <button className="btn primary" onClick={submit} disabled={saving}>
+            {saving ? 'جارٍ الحفظ...' : isEdit ? 'حفظ التغييرات' : 'إنشاء الموديل'}
           </button>
         </div>
       </div>
@@ -231,7 +309,6 @@ export default function ProductForm({ product, onClose }) {
 function VariantBlock({
   variant,
   index,
-  productName,
   canRemove,
   onChange,
   onRemove,
@@ -242,10 +319,6 @@ function VariantBlock({
 }) {
   const [sizeInput, setSizeInput] = useState('')
   const [rangeInput, setRangeInput] = useState(variant._sizeRange || '')
-
-  const autoSku = () => {
-    onChange({ sku: generateSku(productName, variant.color) })
-  }
 
   return (
     <div
@@ -266,42 +339,20 @@ function VariantBlock({
 
       <div className="form-grid" style={{ gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
         <div className="form-group">
-          <label>اللون *</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              value={variant.color}
-              onChange={e => onChange({ color: e.target.value })}
-              placeholder="مثال: Black/White"
-            />
-            <input
-              className="color-input"
-              type="color"
-              value={variant.colorHex || '#000000'}
-              onChange={e => onChange({ colorHex: e.target.value })}
-              title="اختر اللون"
-            />
-          </div>
-        </div>
-        <div className="form-group">
-          <label>الكود (SKU) *</label>
-          <div style={{ display: 'flex', gap: 4 }}>
-            <input
-              className="ltr"
-              value={variant.sku}
-              onChange={e => onChange({ sku: e.target.value })}
-              placeholder="مثال: AM90-BLK"
-              style={{ flex: 1 }}
-            />
-            <button className="btn sm" type="button" onClick={autoSku} title="توليد تلقائي">تلقائي</button>
-          </div>
-        </div>
-        <div className="form-group">
-          <label>تنبيه انخفاض المخزون عند</label>
+          <label>اسم اللون *</label>
           <input
-            type="number"
-            min="0"
-            value={variant.lowStockAt}
-            onChange={e => onChange({ lowStockAt: Number(e.target.value) })}
+            value={variant.colorName}
+            onChange={e => onChange({ colorName: e.target.value })}
+            placeholder="مثال: White/Green"
+          />
+        </div>
+        <div className="form-group">
+          <label>كود اللون *</label>
+          <input
+            className="ltr"
+            value={variant.colorCode}
+            onChange={e => onChange({ colorCode: e.target.value })}
+            placeholder="مثال: WHG"
           />
         </div>
         <div className="form-group">
@@ -362,7 +413,7 @@ function VariantBlock({
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {variant.sizes.map(sz => (
               <div
-                key={sz.size}
+                key={sz.sku || sz.euSize}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
@@ -374,12 +425,12 @@ function VariantBlock({
                   fontSize: 12,
                 }}
               >
-                <span style={{ fontWeight: 500 }}>{sz.size}</span>
+                <span style={{ fontWeight: 500 }}>{sz.euSize}</span>
                 <input
                   type="number"
                   min="0"
-                  value={sz.stock}
-                  onChange={e => onUpdateSizeStock(sz.size, e.target.value)}
+                  value={sz.quantity}
+                  onChange={e => onUpdateSizeStock(sz.euSize, e.target.value)}
                   style={{
                     width: 44,
                     height: 24,
@@ -388,10 +439,15 @@ function VariantBlock({
                     fontSize: 12,
                   }}
                 />
+                {sz.sku && (
+                  <span className="muted" style={{ fontSize: 10 }}>
+                    {sz.sku}
+                  </span>
+                )}
                 <button
                   className="btn ghost"
                   style={{ padding: '0 2px', fontSize: 11, height: 20, border: 'none', color: 'var(--hint)' }}
-                  onClick={() => onRemoveSize(sz.size)}
+                  onClick={() => onRemoveSize(sz.euSize)}
                 >
                   X
                 </button>

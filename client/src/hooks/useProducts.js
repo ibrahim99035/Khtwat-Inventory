@@ -2,21 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import * as api from '../api/products'
 import toast from 'react-hot-toast'
 
-export const useStats = () =>
-  useQuery({ queryKey: ['stats'], queryFn: () => api.getStats().then(r => r.data) })
-
-export const useMeta = () =>
-  useQuery({ queryKey: ['meta'], queryFn: () => api.getMeta().then(r => r.data) })
-
 export const usePublicMeta = () =>
   useQuery({ queryKey: ['public-meta'], queryFn: () => api.getPublicMeta().then(r => r.data) })
-
-export const useProducts = (params) =>
-  useQuery({
-    queryKey: ['products', params],
-    queryFn: () => api.getProducts(params).then(r => r.data),
-    keepPreviousData: true,
-  })
 
 export const usePublicProducts = (params) =>
   useQuery({
@@ -42,49 +29,83 @@ export const useInventoryByModel = (modelId) =>
     enabled: !!modelId,
   })
 
-export const useProduct = (id) =>
+export const useInventoryBySku = (sku) =>
   useQuery({
-    queryKey: ['product', id],
-    queryFn: () => api.getProduct(id).then(r => r.data),
-    enabled: !!id,
+    queryKey: ['inventory-sku', sku],
+    queryFn: () => api.getInventoryBySku(sku).then(r => r.data),
+    enabled: !!sku,
   })
 
 const invalidate = (qc) => {
-  qc.invalidateQueries({ queryKey: ['products'] })
-  qc.invalidateQueries({ queryKey: ['stats'] })
-  qc.invalidateQueries({ queryKey: ['meta'] })
+  qc.invalidateQueries({ queryKey: ['models'] })
+  qc.invalidateQueries({ queryKey: ['model-variants'] })
+  qc.invalidateQueries({ queryKey: ['inventory-model'] })
 }
 
-export const useCreateProduct = () => {
+export const useCreateModel = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: api.createProduct,
+    mutationFn: api.createModel,
     onSuccess: () => {
       invalidate(qc)
-      toast.success('تم إنشاء المنتج')
+      toast.success('تم إنشاء الموديل')
     },
-    onError: (e) => toast.error(e.response?.data?.message || 'فشل إنشاء المنتج'),
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل إنشاء الموديل'),
   })
 }
 
-export const useUpdateProduct = () => {
+export const useUpdateModel = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ id, formData }) => api.updateProduct(id, formData),
-    onSuccess: (_, { id }) => {
+    mutationFn: ({ id, payload }) => api.updateModel(id, payload),
+    onSuccess: () => {
       invalidate(qc)
-      qc.invalidateQueries({ queryKey: ['product', id] })
-      toast.success('تم تحديث المنتج')
+      toast.success('تم تحديث الموديل')
     },
-    onError: (e) => toast.error(e.response?.data?.message || 'فشل تحديث المنتج'),
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل تحديث الموديل'),
   })
 }
 
-export const useUpdateSizeStock = () => {
+export const useCreateVariant = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ productId, variantId, size, stock }) =>
-      api.updateSizeStock(productId, variantId, size, stock),
+    mutationFn: ({ modelId, payload }) => api.createVariant(modelId, payload),
+    onSuccess: () => {
+      invalidate(qc)
+      toast.success('تم إنشاء اللون')
+    },
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل إنشاء اللون'),
+  })
+}
+
+export const useUpdateVariant = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ modelId, variantId, payload }) => api.updateVariant(modelId, variantId, payload),
+    onSuccess: () => {
+      invalidate(qc)
+      toast.success('تم تحديث اللون')
+    },
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل تحديث اللون'),
+  })
+}
+
+export const useCreateInventory = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: api.createInventory,
+    onSuccess: () => {
+      invalidate(qc)
+      toast.success('تم إضافة المخزون')
+    },
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل إضافة المخزون'),
+  })
+}
+
+export const useUpdateInventoryStock = () => {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ sku, payload }) => api.updateInventoryStock(sku, payload),
     onSuccess: () => {
       invalidate(qc)
       toast.success('تم تحديث المخزون')
@@ -93,39 +114,39 @@ export const useUpdateSizeStock = () => {
   })
 }
 
-export const useDeleteProduct = () => {
+export const useUpdateInventoryMeta = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: api.deleteProduct,
+    mutationFn: ({ sku, payload }) => api.updateInventoryMeta(sku, payload),
     onSuccess: () => {
       invalidate(qc)
-      toast.success('تم حذف المنتج')
+      toast.success('تم تحديث بيانات المخزون')
     },
-    onError: (e) => toast.error(e.response?.data?.message || 'فشل حذف المنتج'),
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل تحديث بيانات المخزون'),
   })
 }
 
-export const useBulkDelete = () => {
+export const useAdjustInventoryStock = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: api.bulkDelete,
+    mutationFn: ({ sku, payload }) => api.adjustInventoryStock(sku, payload),
     onSuccess: () => {
       invalidate(qc)
-      toast.success('تم حذف المنتجات')
+      toast.success('تم تعديل المخزون')
     },
-    onError: (e) => toast.error(e.response?.data?.message || 'فشل حذف المنتجات'),
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل تعديل المخزون'),
   })
 }
 
-export const useImportProducts = () => {
+export const useImportInventory = () => {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: ({ products, overwrite }) => api.importProducts(products, overwrite),
-    onSuccess: (res) => {
+    mutationFn: api.importInventory,
+    onSuccess: () => {
       invalidate(qc)
-      const { created, updated, skipped } = res.data
-      toast.success(`تم الاستيراد: ${created} جديد، ${updated} محدث، ${skipped} متجاوز`)
+      toast.success('تم استيراد المخزون')
     },
-    onError: (e) => toast.error(e.response?.data?.message || 'فشل الاستيراد'),
+    onError: (e) => toast.error(e.response?.data?.message || 'فشل استيراد المخزون'),
   })
 }
+

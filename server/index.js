@@ -4,7 +4,6 @@ import cors from 'cors'
 import cookieParser from 'cookie-parser'
 import connectDB from './config/db.js'
 import authRoutes from './routes/authRoutes.js'
-import productRoutes from './routes/productRoutes.js'
 import salesRoutes from './routes/salesRoutes.js'
 import publicRoutes from './routes/publicRoutes.js'
 import modelRoutes from './routes/modelRoutes.js'
@@ -22,7 +21,6 @@ app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 
 app.use('/api/auth', authRoutes)
-app.use('/api/products', productRoutes)
 app.use('/api/sales', salesRoutes)
 app.use('/api/public', publicRoutes)
 app.use('/api/models', modelRoutes)

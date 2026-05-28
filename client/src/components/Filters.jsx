@@ -1,13 +1,17 @@
-import { useMeta } from '../hooks/useProducts'
+import { useModels } from '../hooks/useProducts'
 
 export default function Filters({ params, setParam }) {
-  const { data: meta } = useMeta()
+  const { data } = useModels()
+  const models = data?.models || []
+  const categories = Array.from(new Set(models.map(m => m.category).filter(Boolean)))
+  const brands = Array.from(new Set(models.map(m => m.brand).filter(Boolean)))
+  const genders = Array.from(new Set(models.map(m => m.gender).filter(Boolean)))
 
   return (
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
       <input
         style={{ flex: '1', minWidth: 200 }}
-        placeholder="ابحث بالاسم أو الماركة أو الكود..."
+        placeholder="ابحث بالموديل أو الكود أو الماركة..."
         value={params.search}
         onChange={e => setParam('search', e.target.value)}
       />
@@ -18,7 +22,7 @@ export default function Filters({ params, setParam }) {
         style={{ minWidth: 140 }}
       >
         <option value="">كل التصنيفات</option>
-        {meta?.categories.map(c => (
+        {categories.map(c => (
           <option key={c} value={c}>{c}</option>
         ))}
       </select>
@@ -29,7 +33,7 @@ export default function Filters({ params, setParam }) {
         style={{ minWidth: 130 }}
       >
         <option value="">كل الماركات</option>
-        {meta?.brands.map(b => (
+        {brands.map(b => (
           <option key={b} value={b}>{b}</option>
         ))}
       </select>
@@ -51,24 +55,14 @@ export default function Filters({ params, setParam }) {
         style={{ minWidth: 120 }}
       >
         <option value="">كل الأنواع</option>
-        {(meta?.genders || ['unisex', 'male', 'female']).map(g => (
+        {(genders.length ? genders : ['unisex', 'male', 'female']).map(g => (
           <option key={g} value={g}>
             {g === 'unisex' ? 'للجنسين' : g === 'male' ? 'رجالي' : 'نسائي'}
           </option>
         ))}
       </select>
 
-      <select
-        value={params.available}
-        onChange={e => setParam('available', e.target.value)}
-        style={{ minWidth: 150 }}
-      >
-        <option value="">كل الحالات</option>
-        <option value="true">متاح</option>
-        <option value="false">غير متاح</option>
-      </select>
-
-      {(params.search || params.category || params.brand || params.status || params.gender || params.available) && (
+      {(params.search || params.category || params.brand || params.status || params.gender) && (
         <button
           className="btn ghost"
           onClick={() => {
@@ -77,7 +71,6 @@ export default function Filters({ params, setParam }) {
             setParam('brand', '')
             setParam('status', '')
             setParam('gender', '')
-            setParam('available', '')
           }}
         >
           مسح

@@ -1,8 +1,9 @@
 import Sale from '../models/Sale.js'
-import Product from '../models/Product.js'
+import mongoose from 'mongoose'
 import SizeInventory from '../models/SizeInventory.js'
 import ColorVariant from '../models/ColorVariant.js'
 import ProductModel from '../models/ProductModel.js'
+import InventoryAdjustment from '../models/InventoryAdjustment.js'
 
 const toNumber = (val, fallback = 0) => {
   const num = Number(val)
@@ -128,6 +129,8 @@ export const getSale = async (req, res) => {
 }
 
 export const createSale = async (req, res) => {
+  const session = await mongoose.startSession()
+  session.startTransaction()
   try {
     const { items, discount = 0, tax = 0, paidAmount = 0, paymentMethod, customer } = req.body
 
@@ -143,71 +146,56 @@ export const createSale = async (req, res) => {
         return res.status(400).json({ message: 'Invalid item quantity' })
       }
 
-      if (item.sku) {
-        const sku = normalizeToken(item.sku)
-        const inventory = await SizeInventory.findOne({ sku })
-        if (!inventory) return res.status(404).json({ message: 'SKU not found' })
-
-        if (inventory.availableQuantity < qty) {
-          return res.status(400).json({ message: 'Insufficient available stock for SKU ' + sku })
-        }
-
-        inventory.quantity -= qty
-        await inventory.save()
-
-        const variant = await ColorVariant.findById(inventory.variantId)
-        const model = variant ? await ProductModel.findById(variant.productModelId) : null
-
-        const unitPrice = toNumber(item.unitPrice, model?.sellPrice)
-        if (unitPrice <= 0) {
-          return res.status(400).json({ message: 'Unit price is required for SKU items' })
-        }
-
-        const lineTotal = unitPrice * qty
-
-        normalizedItems.push({
-          sku,
-          modelId: model?._id,
-          variantId: inventory.variantId,
-          size: String(inventory.euSize),
-          euSize: inventory.euSize,
-          qty,
-          unitPrice,
-          lineTotal,
-        })
-      } else {
-        if (!item.productId || !item.variantId || !item.size) {
-          return res.status(400).json({ message: 'Invalid item data' })
-        }
-
-        const product = await Product.findById(item.productId)
-        if (!product) return res.status(404).json({ message: 'Product not found' })
-
-        const variant = product.variants.id(item.variantId)
-        if (!variant) return res.status(404).json({ message: 'Variant not found' })
-
-        const sizeEntry = variant.sizes.find(s => s.size === item.size)
-        if (!sizeEntry) return res.status(404).json({ message: 'Size not found' })
-
-        if (sizeEntry.stock < qty) {
-          return res.status(400).json({ message: 'Insufficient stock for size ' + item.size })
-        }
-
-        sizeEntry.stock -= qty
-        await product.save()
-
-        const unitPrice = toNumber(item.unitPrice, variant.sellPrice)
-        const lineTotal = unitPrice * qty
-
-        normalizedItems.push({
-          productId: product._id,
-          variantId: variant._id,
-          size: item.size,
-          qty,
-          unitPrice,
-          lineTotal,
-        })
+      if (!item.sku) {
+        return res.status(400).json({ message: 'SKU is required for all sale items' })
       }
+
+      const sku = normalizeToken(item.sku)
+      const inventory = await SizeInventory.findOne({ sku }).session(session)
+      if (!inventory) return res.status(404).json({ message: 'SKU not found' })
+
+      if (inventory.availableQuantity < qty) {
+        await session.abortTransaction()
+        return res.status(400).json({ message: 'Insufficient available stock for SKU ' + sku })
+      }
+
+      const previousQuantity = inventory.quantity
+      inventory.quantity -= qty
+      await inventory.save({ session })
+
+      // Audit the deduction
+      await InventoryAdjustment.create([{
+        sku: inventory.sku,
+        variantId: inventory.variantId,
+        euSize: inventory.euSize,
+        delta: -qty,
+        previousQuantity,
+        nextQuantity: inventory.quantity,
+        reason: 'sale',
+        note: 'Automated sale deduction',
+      }], { session })
+
+      const variant = await ColorVariant.findById(inventory.variantId)
+      const model = variant ? await ProductModel.findById(variant.productModelId) : null
+
+      const defaultPrice = variant?.sellPrice ?? model?.sellPrice
+      const unitPrice = toNumber(item.unitPrice, defaultPrice)
+      if (unitPrice <= 0) {
+        return res.status(400).json({ message: 'Unit price is required for SKU items' })
+      }
+
+      const lineTotal = unitPrice * qty
+
+      normalizedItems.push({
+        sku,
+        modelId: model?._id,
+        variantId: inventory.variantId,
+        size: String(inventory.euSize),
+        euSize: inventory.euSize,
+        qty,
+        unitPrice,
+        lineTotal,
+      })
     }
 
     const { total } = computeSaleTotals(normalizedItems, toNumber(discount), toNumber(tax))
@@ -225,6 +213,7 @@ export const createSale = async (req, res) => {
 
     if (paymentStatus !== 'paid') {
       if (!customer?.name || !customer?.phone) {
+        await session.abortTransaction()
         return res.status(400).json({ message: 'Customer name and phone are required' })
       }
     }
@@ -246,10 +235,14 @@ export const createSale = async (req, res) => {
         : [],
     })
 
-    await sale.save()
+    await sale.save({ session })
+    await session.commitTransaction()
     res.status(201).json(sale)
   } catch (err) {
+    await session.abortTransaction()
     res.status(500).json({ message: err.message })
+  } finally {
+    session.endSession()
   }
 }
 
@@ -284,9 +277,12 @@ export const addPayment = async (req, res) => {
 }
 
 export const createReturn = async (req, res) => {
+  const session = await mongoose.startSession()
+  session.startTransaction()
   try {
     const { items, method, note } = req.body
     if (!Array.isArray(items) || items.length === 0) {
+      await session.abortTransaction()
       return res.status(400).json({ message: 'Return items are required' })
     }
 
@@ -300,37 +296,46 @@ export const createReturn = async (req, res) => {
     for (const item of items) {
       const qty = toNumber(item.qty)
       if (!item.lineId || qty <= 0) {
+        await session.abortTransaction()
         return res.status(400).json({ message: 'Invalid return item data' })
       }
 
       const line = sale.items.id(item.lineId)
-      if (!line) return res.status(404).json({ message: 'Line item not found' })
+      if (!line) {
+        await session.abortTransaction()
+        return res.status(404).json({ message: 'Line item not found' })
+      }
 
       const alreadyReturned = returnedMap[String(item.lineId)] || 0
       const remaining = line.qty - alreadyReturned
 
       if (qty > remaining) {
+        await session.abortTransaction()
         return res.status(400).json({ message: 'Return qty exceeds remaining' })
       }
 
       const condition = item.condition || 'resellable'
       if (condition === 'resellable') {
-        if (line.sku) {
-          const inventory = await SizeInventory.findOne({ sku: normalizeToken(line.sku) })
-          if (inventory) {
-            inventory.quantity += qty
-            await inventory.save()
-          }
-        } else if (line.productId) {
-          const product = await Product.findById(line.productId)
-          if (product) {
-            const variant = product.variants.id(line.variantId)
-            const sizeEntry = variant?.sizes.find(s => s.size === line.size)
-            if (sizeEntry) {
-              sizeEntry.stock += qty
-              await product.save()
-            }
-          }
+        if (!line.sku) {
+          await session.abortTransaction()
+          return res.status(400).json({ message: 'Return requires SKU' })
+        }
+        const inventory = await SizeInventory.findOne({ sku: normalizeToken(line.sku) }).session(session)
+        if (inventory) {
+          const previousQuantity = inventory.quantity
+          inventory.quantity += qty
+          await inventory.save({ session })
+
+          await InventoryAdjustment.create([{
+            sku: inventory.sku,
+            variantId: inventory.variantId,
+            euSize: inventory.euSize,
+            delta: qty,
+            previousQuantity,
+            nextQuantity: inventory.quantity,
+            reason: 'return',
+            note: `Return for sale ${sale._id}`,
+          }], { session })
         }
       }
 
@@ -351,10 +356,14 @@ export const createReturn = async (req, res) => {
     })
 
     refreshSaleStatus(sale)
-    await sale.save()
+    await sale.save({ session })
 
+    await session.commitTransaction()
     res.json(sale)
   } catch (err) {
+    await session.abortTransaction()
     res.status(500).json({ message: err.message })
+  } finally {
+    session.endSession()
   }
 }
