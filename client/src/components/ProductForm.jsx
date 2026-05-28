@@ -18,6 +18,7 @@ const EMPTY_VARIANT = () => ({
   colorCode: '',
   costPrice: '',
   sellPrice: '',
+  imageSet: [],
   sizes: [],
 })
 
@@ -46,6 +47,8 @@ export default function ProductForm({ product, onClose }) {
   const [supplier, setSupplier] = useState(product.supplier || '')
   const [releaseSeason, setReleaseSeason] = useState(product.releaseSeason || '')
   const [tags, setTags] = useState((product.tags || []).join(', '))
+  const [imageSet, setImageSet] = useState(product.imageSet || [])
+  const [modelImageUrl, setModelImageUrl] = useState('')
   const [initialized, setInitialized] = useState(false)
 
   const inventory = inventoryData?.inventory || []
@@ -75,17 +78,28 @@ export default function ProductForm({ product, onClose }) {
       colorCode: v.colorCode || '',
       costPrice: v.costPrice ?? '',
       sellPrice: v.sellPrice ?? '',
+      imageSet: v.imageSet || [],
       sizes: sizesByVariant.get(String(v._id)) || [],
     }))
     setVariants(mapped.length ? mapped : [EMPTY_VARIANT()])
     setInitialized(true)
   }, [isEdit, initialized, variantsData, sizesByVariant])
 
-  const updateVariant = (tempId, changes) => {
+  const updateVariantLocal = (tempId, changes) => {
     setVariants(vs => vs.map(v => {
       if (v._tempId !== tempId) return v
       return { ...v, ...changes }
     }))
+  }
+
+  const addModelImage = () => {
+    if (!modelImageUrl.trim()) return
+    setImageSet(prev => [...prev, { url: modelImageUrl.trim(), publicId: Date.now().toString() }])
+    setModelImageUrl('')
+  }
+
+  const removeModelImage = (url) => {
+    setImageSet(prev => prev.filter(img => img.url !== url))
   }
 
   const addVariant = () =>
@@ -146,6 +160,7 @@ export default function ProductForm({ product, onClose }) {
         material,
         supplier,
         releaseSeason,
+        imageSet,
         tags: tags.split(',').map(t => t.trim()).filter(Boolean),
       }
 
@@ -163,6 +178,7 @@ export default function ProductForm({ product, onClose }) {
           colorCode: variant.colorCode,
           costPrice: Number(variant.costPrice || 0),
           sellPrice: Number(variant.sellPrice || 0),
+          imageSet: variant.imageSet,
         }
 
         if (variant._id) {
@@ -271,6 +287,27 @@ export default function ProductForm({ product, onClose }) {
               <input value={tags} onChange={e => setTags(e.target.value)} placeholder="tag1, tag2" />
             </div>
           </div>
+
+          <div style={{ marginTop: 14 }}>
+            <label className="section-title" style={{ fontSize: 11 }}>صور الموديل (عامة / براندنج)</label>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              <input 
+                placeholder="رابط الصورة (URL)" 
+                value={modelImageUrl} 
+                onChange={e => setModelImageUrl(e.target.value)} 
+                className="ltr"
+              />
+              <button className="btn sm" type="button" onClick={addModelImage}>إضافة</button>
+            </div>
+            <div className="image-previews">
+              {imageSet.map((img, i) => (
+                <div key={i} className="image-thumb">
+                  <img src={img.url} alt="" />
+                  <button className="remove-img" type="button" onClick={() => removeModelImage(img.url)}>×</button>
+                </div>
+              ))}
+            </div>
+          </div>
         </section>
 
         <section style={{ marginTop: '1.5rem' }}>
@@ -285,7 +322,7 @@ export default function ProductForm({ product, onClose }) {
               variant={v}
               index={idx}
               canRemove={variants.length > 1}
-              onChange={(changes) => updateVariant(v._tempId, changes)}
+              onChange={(changes) => updateVariantLocal(v._tempId, changes)}
               onRemove={() => removeVariant(v._tempId)}
               onSetSizeRange={(r) => setSizeRange(v._tempId, r)}
               onUpdateSizeStock={(size, stock) => updateSizeQty(v._tempId, size, stock)}
@@ -319,6 +356,17 @@ function VariantBlock({
 }) {
   const [sizeInput, setSizeInput] = useState('')
   const [rangeInput, setRangeInput] = useState(variant._sizeRange || '')
+  const [imageUrl, setImageUrl] = useState('')
+
+  const addImage = () => {
+    if (!imageUrl.trim()) return
+    onChange({ imageSet: [...variant.imageSet, { url: imageUrl.trim(), publicId: Date.now().toString() }] })
+    setImageUrl('')
+  }
+
+  const removeImage = (url) => {
+    onChange({ imageSet: variant.imageSet.filter(img => img.url !== url) })
+  }
 
   return (
     <div
@@ -376,6 +424,27 @@ function VariantBlock({
             onChange={e => onChange({ sellPrice: e.target.value })}
             placeholder="0"
           />
+        </div>
+      </div>
+
+      <div style={{ marginTop: 14 }}>
+        <label className="section-title" style={{ fontSize: 11 }}>صور النسخة</label>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+          <input 
+            placeholder="رابط الصورة (URL)" 
+            value={imageUrl} 
+            onChange={e => setImageUrl(e.target.value)} 
+            className="ltr"
+          />
+          <button className="btn sm" onClick={addImage}>إضافة</button>
+        </div>
+        <div className="image-previews">
+          {variant.imageSet.map((img, i) => (
+            <div key={i} className="image-thumb">
+              <img src={img.url} alt="" />
+              <button className="remove-img" onClick={() => removeImage(img.url)}>×</button>
+            </div>
+          ))}
         </div>
       </div>
 

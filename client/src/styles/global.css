@@ -1,6 +1,7 @@
 @import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
 
 :root {
+  background-color: var(--bg);
   --bg: #f5f1e8;
   --surface: #ffffff;
   --ink: #1b1a16;
@@ -23,6 +24,7 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
   color: var(--ink);
   background:
     radial-gradient(1200px 800px at 80% -10%, #ffe6d4 0%, transparent 60%),
@@ -35,11 +37,11 @@ body {
 
 :root[data-theme="dark"] {
   --bg: #121214;
-  --surface: #1b1d21;
-  --ink: #f2f2f0;
-  --muted: #b4b0a7;
-  --hint: #8d887e;
-  --border: #2f3238;
+  --surface: #181a1e;
+  --ink: #e2e2e0;
+  --muted: #a4a097;
+  --hint: #7d786e;
+  --border: #2b2e33;
   --primary: #ff8b4d;
   --primary-dark: #ea7437;
   --green: #4cc67a;
@@ -52,11 +54,11 @@ body {
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     --bg: #121214;
-    --surface: #1b1d21;
-    --ink: #f2f2f0;
-    --muted: #b4b0a7;
-    --hint: #8d887e;
-    --border: #2f3238;
+    --surface: #181a1e;
+    --ink: #e2e2e0;
+    --muted: #a4a097;
+    --hint: #7d786e;
+    --border: #2b2e33;
     --primary: #ff8b4d;
     --primary-dark: #ea7437;
     --green: #4cc67a;

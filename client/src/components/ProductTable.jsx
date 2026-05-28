@@ -287,6 +287,7 @@ function StockEditModal({ entry, onClose }) {
 
 function ProductDetailsModal({ model, inventory, onClose, onEdit }) {
   const stats = computeInventoryStats(inventory)
+  const heroImage = model.variants?.find(v => v.thumbnail?.url || v.imageSet?.[0]?.url)?.imageSet?.[0]?.url
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -298,7 +299,11 @@ function ProductDetailsModal({ model, inventory, onClose, onEdit }) {
 
         <div className="product-hero">
           <div className="product-image">
-            <span>ص</span>
+            {heroImage ? (
+              <img src={heroImage} alt={model.modelName} />
+            ) : (
+              <span>ص</span>
+            )}
           </div>
           <div className="product-meta">
             <h3>{model.modelName}</h3>
@@ -452,6 +457,7 @@ export default function ProductTable({ params, setParam, onEdit }) {
                 const isExp = expanded === m._id
                 const inv = inventoryMap.get(String(m._id)) || []
                 const stats = computeInventoryStats(inv)
+                const rowImage = m.variants?.[0]?.thumbnail?.url || m.variants?.[0]?.imageSet?.[0]?.url
 
                 return (
                   <Fragment key={m._id}>
@@ -474,7 +480,11 @@ export default function ProductTable({ params, setParam, onEdit }) {
                             fontSize: 20,
                           }}
                         >
-                          ص
+                          {rowImage ? (
+                            <img src={rowImage} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          ) : (
+                            'ص'
+                          )}
                         </div>
                       </td>
                       <td>

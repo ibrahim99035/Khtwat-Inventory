@@ -47,7 +47,7 @@ const buildPublicModel = (model, variants, inventory) => {
   const maxPrice = prices.length ? Math.max(...prices) : 0
   const priceRange = { min: minPrice, max: maxPrice }
 
-  const heroImage = mappedVariants.find(v => v.image)?.image || null
+  const heroImage = model.imageSet?.[0]?.url || mappedVariants.find(v => v.image)?.image || null
 
   return {
     _id: model._id,

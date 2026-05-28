@@ -21,6 +21,7 @@ export const createProductModel = async (req, res) => {
       material,
       costPrice,
       sellPrice,
+      imageSet,
       tags,
       supplier,
       releaseSeason,
@@ -40,6 +41,7 @@ export const createProductModel = async (req, res) => {
       material,
       costPrice,
       sellPrice,
+      imageSet: imageSet || [],
       tags,
       supplier,
       releaseSeason,
@@ -148,6 +150,7 @@ export const updateProductModel = async (req, res) => {
       material,
       costPrice,
       sellPrice,
+      imageSet,
       tags,
       supplier,
       releaseSeason,
@@ -161,6 +164,7 @@ export const updateProductModel = async (req, res) => {
     if (material !== undefined) model.material = material
     if (costPrice !== undefined) model.costPrice = costPrice
     if (sellPrice !== undefined) model.sellPrice = sellPrice
+    if (imageSet !== undefined) model.imageSet = imageSet
     if (tags !== undefined) model.tags = tags
     if (supplier !== undefined) model.supplier = supplier
     if (releaseSeason !== undefined) model.releaseSeason = releaseSeason
