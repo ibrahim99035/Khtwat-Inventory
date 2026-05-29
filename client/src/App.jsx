@@ -4,6 +4,7 @@ import Login from './pages/Login'
 import Dashboard from './pages/Dashboard'
 import Sales from './pages/Sales'
 import PublicHome from './pages/PublicHome'
+import Health from './pages/Health'
 
 const ProtectedRoute = ({ children }) => {
   const { user, loading } = useAuth()
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="/" element={<PublicHome />} />
         <Route path="/shop" element={<Navigate to="/" replace />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/health" element={<Health />} />
         <Route
           path="/inventory"
           element={
