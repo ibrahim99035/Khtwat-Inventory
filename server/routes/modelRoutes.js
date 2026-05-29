@@ -8,7 +8,9 @@ import {
   listVariantsByModel,
   updateProductModel,
   updateColorVariant,
+  uploadModelImages,
 } from '../controllers/productModelController.js'
+import { upload } from '../middleware/upload.js'
 
 const router = Router()
 
@@ -20,6 +22,7 @@ router.get('/:modelId/variants', listVariantsByModel)
 
 router.post('/', createProductModel)
 router.post('/:modelId/variants', createColorVariant)
+router.post('/upload', upload.array('images', 10), uploadModelImages)
 
 router.patch('/:id', updateProductModel)
 router.patch('/:modelId/variants/:variantId', updateColorVariant)

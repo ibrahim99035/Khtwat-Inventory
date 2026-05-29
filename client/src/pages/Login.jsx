@@ -1,14 +1,18 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
 import { login } from '../api/products'
 
 export default function Login() {
-  const { setUser } = useAuth()
+  const { setUser, user, loading } = useAuth()
   const navigate = useNavigate()
   const [form, setForm] = useState({ username: '', password: '' })
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    if (!loading && user) navigate('/inventory', { replace: true })
+  }, [loading, user, navigate])
 
   const submit = async (e) => {
     e.preventDefault()
@@ -17,7 +21,7 @@ export default function Login() {
     try {
       const res = await login(form)
       setUser(res.data)
-      navigate('/')
+      navigate('/inventory')
     } catch (err) {
       setError(err.response?.data?.message || 'فشل تسجيل الدخول')
     } finally {

@@ -41,6 +41,15 @@ export const createVariant = (modelId, payload) => api.post(`/models/${modelId}/
 export const updateVariant = (modelId, variantId, payload) =>
   api.patch(`/models/${modelId}/variants/${variantId}`, payload)
 
+export const uploadImages = (files, folder) => {
+  const formData = new FormData()
+  files.forEach(file => formData.append('images', file))
+  if (folder) formData.append('folder', folder)
+  return api.post('/models/upload', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+}
+
 export const createInventory = (payload) => api.post('/inventory', payload)
 export const importInventory = (payload) => api.post('/inventory/import', payload)
 export const updateInventoryStock = (sku, payload) => api.patch(`/inventory/sku/${sku}/stock`, payload)

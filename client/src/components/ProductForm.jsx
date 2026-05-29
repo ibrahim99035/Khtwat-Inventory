@@ -10,7 +10,9 @@ import {
   useUpdateModel,
   useUpdateVariant,
 } from '../hooks/useProducts'
+import { uploadImages } from '../api/products'
 import { expandSizeRange } from '../utils/helpers'
+import ImageUploader from './ImageUploader'
 
 const EMPTY_VARIANT = () => ({
   _tempId: Math.random().toString(36).slice(2),
@@ -19,6 +21,7 @@ const EMPTY_VARIANT = () => ({
   costPrice: '',
   sellPrice: '',
   imageSet: [],
+  newFiles: [],
   sizes: [],
 })
 
@@ -48,7 +51,7 @@ export default function ProductForm({ product, onClose }) {
   const [releaseSeason, setReleaseSeason] = useState(product.releaseSeason || '')
   const [tags, setTags] = useState((product.tags || []).join(', '))
   const [imageSet, setImageSet] = useState(product.imageSet || [])
-  const [modelImageUrl, setModelImageUrl] = useState('')
+  const [modelNewFiles, setModelNewFiles] = useState([])
   const [initialized, setInitialized] = useState(false)
 
   const inventory = inventoryData?.inventory || []
@@ -79,6 +82,7 @@ export default function ProductForm({ product, onClose }) {
       costPrice: v.costPrice ?? '',
       sellPrice: v.sellPrice ?? '',
       imageSet: v.imageSet || [],
+        newFiles: [],
       sizes: sizesByVariant.get(String(v._id)) || [],
     }))
     setVariants(mapped.length ? mapped : [EMPTY_VARIANT()])
@@ -92,14 +96,8 @@ export default function ProductForm({ product, onClose }) {
     }))
   }
 
-  const addModelImage = () => {
-    if (!modelImageUrl.trim()) return
-    setImageSet(prev => [...prev, { url: modelImageUrl.trim(), publicId: Date.now().toString() }])
-    setModelImageUrl('')
-  }
-
-  const removeModelImage = (url) => {
-    setImageSet(prev => prev.filter(img => img.url !== url))
+  const removeModelImage = (publicId) => {
+    setImageSet(prev => prev.filter(img => img.publicId !== publicId))
   }
 
   const addVariant = () =>
@@ -150,6 +148,10 @@ export default function ProductForm({ product, onClose }) {
     setSaving(true)
     try {
       let modelDoc = product
+      const modelUploads = modelNewFiles.length
+        ? (await uploadImages(modelNewFiles, 'product-models')).data.assets
+        : []
+      const modelImageSet = [...imageSet, ...modelUploads]
       const modelPayload = {
         modelId: modelId.trim().toUpperCase(),
         brand,
@@ -160,7 +162,7 @@ export default function ProductForm({ product, onClose }) {
         material,
         supplier,
         releaseSeason,
-        imageSet,
+        imageSet: modelImageSet,
         tags: tags.split(',').map(t => t.trim()).filter(Boolean),
       }
 
@@ -173,12 +175,16 @@ export default function ProductForm({ product, onClose }) {
 
       const variantIdMap = new Map()
       for (const variant of variants) {
+        const variantUploads = variant.newFiles?.length
+          ? (await uploadImages(variant.newFiles, 'product-variants')).data.assets
+          : []
+        const variantImageSet = [...variant.imageSet, ...variantUploads]
         const payload = {
           colorName: variant.colorName,
           colorCode: variant.colorCode,
           costPrice: Number(variant.costPrice || 0),
           sellPrice: Number(variant.sellPrice || 0),
-          imageSet: variant.imageSet,
+          imageSet: variantImageSet,
         }
 
         if (variant._id) {
@@ -290,23 +296,11 @@ export default function ProductForm({ product, onClose }) {
 
           <div style={{ marginTop: 14 }}>
             <label className="section-title" style={{ fontSize: 11 }}>صور الموديل (عامة / براندنج)</label>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              <input 
-                placeholder="رابط الصورة (URL)" 
-                value={modelImageUrl} 
-                onChange={e => setModelImageUrl(e.target.value)} 
-                className="ltr"
-              />
-              <button className="btn sm" type="button" onClick={addModelImage}>إضافة</button>
-            </div>
-            <div className="image-previews">
-              {imageSet.map((img, i) => (
-                <div key={i} className="image-thumb">
-                  <img src={img.url} alt="" />
-                  <button className="remove-img" type="button" onClick={() => removeModelImage(img.url)}>×</button>
-                </div>
-              ))}
-            </div>
+            <ImageUploader
+              existing={imageSet}
+              onFilesChange={setModelNewFiles}
+              onRemoveExisting={removeModelImage}
+            />
           </div>
         </section>
 
@@ -356,16 +350,9 @@ function VariantBlock({
 }) {
   const [sizeInput, setSizeInput] = useState('')
   const [rangeInput, setRangeInput] = useState(variant._sizeRange || '')
-  const [imageUrl, setImageUrl] = useState('')
 
-  const addImage = () => {
-    if (!imageUrl.trim()) return
-    onChange({ imageSet: [...variant.imageSet, { url: imageUrl.trim(), publicId: Date.now().toString() }] })
-    setImageUrl('')
-  }
-
-  const removeImage = (url) => {
-    onChange({ imageSet: variant.imageSet.filter(img => img.url !== url) })
+  const removeImage = (publicId) => {
+    onChange({ imageSet: variant.imageSet.filter(img => img.publicId !== publicId) })
   }
 
   return (
@@ -427,26 +414,14 @@ function VariantBlock({
         </div>
       </div>
 
-      <div style={{ marginTop: 14 }}>
-        <label className="section-title" style={{ fontSize: 11 }}>صور النسخة</label>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-          <input 
-            placeholder="رابط الصورة (URL)" 
-            value={imageUrl} 
-            onChange={e => setImageUrl(e.target.value)} 
-            className="ltr"
+        <div style={{ marginTop: 14 }}>
+          <label className="section-title" style={{ fontSize: 11 }}>صور النسخة</label>
+          <ImageUploader
+            existing={variant.imageSet}
+            onFilesChange={(files) => onChange({ newFiles: files })}
+            onRemoveExisting={removeImage}
           />
-          <button className="btn sm" onClick={addImage}>إضافة</button>
         </div>
-        <div className="image-previews">
-          {variant.imageSet.map((img, i) => (
-            <div key={i} className="image-thumb">
-              <img src={img.url} alt="" />
-              <button className="remove-img" onClick={() => removeImage(img.url)}>×</button>
-            </div>
-          ))}
-        </div>
-      </div>
 
       <div style={{ marginTop: 14 }}>
         <p style={{ fontSize: 12, color: 'var(--muted)', fontWeight: 500, marginBottom: 8 }}>

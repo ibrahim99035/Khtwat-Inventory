@@ -1,6 +1,7 @@
 import ProductModel from '../models/ProductModel.js'
 import ColorVariant from '../models/ColorVariant.js'
 import SizeInventory from '../models/SizeInventory.js'
+import { uploadToCloudinary } from '../middleware/upload.js'
 
 const normalizeToken = (val) => String(val || '')
   .toUpperCase()
@@ -82,6 +83,24 @@ export const listProductModels = async (req, res) => {
     res.status(500).json({ message: err.message });
   }
 };
+
+export const uploadModelImages = async (req, res) => {
+  try {
+    const files = req.files || []
+    if (!files.length) {
+      return res.status(400).json({ message: 'No images provided' })
+    }
+
+    const folder = req.body?.folder || 'shoe-inventory'
+    const assets = await Promise.all(
+      files.map(file => uploadToCloudinary(file.buffer, folder))
+    )
+
+    res.json({ assets })
+  } catch (err) {
+    res.status(500).json({ message: err.message })
+  }
+}
 
 export const getProductModel = async (req, res) => {
   try {
